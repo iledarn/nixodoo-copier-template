@@ -73,7 +73,7 @@ raised with the user before any custom code is written.
   `$o-extra-grid-breakpoints` in `web/static/src/scss/primary_variables.scss`:
   `vsm` 475px added, `xxl` 1534px.
 - No `fw-semibold` (5.2+): `fw-bold` or `fw-bolder`.
-{% elif odoo_version == '19.0' %}
+{% elif odoo_version in ['19.0', '20.0'] %}
 - Bootstrap **5.3.3** (banner in `src/odoo/addons/web/static/lib/bootstrap/scss/mixins/_banner.scss`).
 - Stock breakpoints, `xxl` 1400px. `fw-semibold` exists.
 {% else %}

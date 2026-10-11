@@ -37,7 +37,7 @@ sudo systemctl restart nix-daemon
 
 ## What it generates
 
-- **Odoo 16.0 to 19.0** on Python 3.10 to 3.14 and PostgreSQL 13 to 18, chosen at generation time
+- **Odoo 16.0 to 20.0** on Python 3.10 to 3.14 and PostgreSQL 13 to 18, chosen at generation time
   and verified end to end for every version.
 - **Three toolchains** as flake packages: `dev-server`, `test-server`, `prod-server`, the first two
   wrapping `odoo` and the Postgres client tools against this project's cluster; `prod-server`
@@ -64,7 +64,7 @@ These are the ones worth a thought:
 
 | Question | Default | Why you might change it |
 | --- | --- | --- |
-| `odoo_version` | `19.0` | everything else follows from it |
+| `odoo_version` | `20.0` | everything else follows from it |
 | `custom_repo_pattern` / `custom_repo_name` | empty | your own addons repo; unlocks the development pipeline |
 | `use_claude_code` | `true` | the whole `.claude/` layer |
 | `use_kb` | `false` | memory in [kb](https://github.com/okolovmark/kb) instead of markdown files |
