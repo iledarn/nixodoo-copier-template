@@ -105,7 +105,15 @@
                         olefile = addSetuptoolsBuildDep prev.olefile;
                         docopt = addSetuptoolsBuildDep prev.docopt;
                         ebaysdk = addSetuptoolsBuildDep prev.ebaysdk;
-                        rjsmin = addSetuptoolsBuildDep prev.rjsmin;
+
+                        # rjsmin's setup.py compiles with the debug cflags bundled in its
+                        # sdist (they include --coverage) whenever CFLAGS is unset, so the
+                        # extension comes out gcov-instrumented and prints
+                        # "profiling:/build:Cannot create directory" at the exit of every
+                        # process that imported it. Any CFLAGS value skips that file.
+                        rjsmin = (addSetuptoolsBuildDep prev.rjsmin).overrideAttrs (old: {
+                            env = (old.env or {}) // { CFLAGS = "-O2"; };
+                        });
 
                         # psycopg2 compiles against libpq: setup.py needs pg_config on PATH
                         # (a dedicated package after the nixpkgs postgresql output split)
