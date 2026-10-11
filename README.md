@@ -64,7 +64,7 @@ These are the ones worth a thought:
 
 | Question | Default | Why you might change it |
 | --- | --- | --- |
-| `odoo_version` | `19.0` | everything else follows from it |
+| `odoo_version` | `20.0` | everything else follows from it |
 | `custom_repo_pattern` / `custom_repo_name` | empty | your own addons repo; unlocks the development pipeline |
 | `use_claude_code` | `true` | the whole `.claude/` layer |
 | `use_kb` | `false` | memory in [kb](https://github.com/okolovmark/kb) instead of markdown files |

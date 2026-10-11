@@ -34,7 +34,7 @@ project_name:
 odoo_version:
   type: str
   help: Odoo Community version (branch of odoo/odoo)
-  default: "19.0"
+  default: "20.0"
   choices:
     - "16.0"
     - "17.0"

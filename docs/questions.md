@@ -5,7 +5,7 @@ Defaults in the table; anything you leave empty turns its feature off. See [the 
 | Question | Default |
 |---|---|
 | `project_name` | `odoo-dev-env` |
-| `odoo_version` | `19.0` (16.0–20.0) |
+| `odoo_version` | `20.0` (16.0–20.0) |
 | `python_version` | per Odoo version (16→3.10, 17→3.11, 18/19/20→3.12; 20 refuses < 3.12) |
 | `postgres_version` | 15 for Odoo ≤17, 17 for 18+ (20 needs ≥ 16) |
 | ports (http / gevent / nginx / postgres) | derived from the Odoo major (`16.0` → 1669/1672/16069/16432) |

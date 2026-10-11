@@ -12,7 +12,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: default-19
+          - name: default-20
             args: -d project_name=ci-default
           - name: full-16
             args: >-
@@ -35,9 +35,9 @@ jobs:
               -d project_name=ci-repo -d odoo_version=17.0
               -d custom_repo_pattern=git@github.com:acme/{}.git
               -d custom_repo_name=acme-addons
-          - name: py314-20
+          - name: py314-19
             args: >-
-              -d project_name=ci-twenty -d odoo_version=20.0
+              -d project_name=ci-nineteen -d odoo_version=19.0
               -d python_version=3.14 -d postgres_version=18 -d use_queue_job=true
     name: ${{ matrix.name }}
     steps:
