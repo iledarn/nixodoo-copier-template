@@ -40,10 +40,11 @@ odoo_version:
     - "17.0"
     - "18.0"
     - "19.0"
+    - "20.0"
 
 python_version:
   type: str
-  help: Python for the Odoo env (16 needs 3.10; 17 runs on 3.10/3.11; 18/19 default to 3.12; 19 also pins its requirements for 3.13 and 3.14, so the newest interpreter is a fine choice there; pyproject then carries uv overrides for the two pins that ship no wheel for it)
+  help: Python for the Odoo env (16 needs 3.10; 17 runs on 3.10/3.11; 18/19/20 default to 3.12; 20 refuses anything older; 19 and 20 also pin their requirements for 3.13 and 3.14, so the newest interpreter is a fine choice there; pyproject then carries uv overrides for the two pins that ship no wheel for it)
   default: "{% if odoo_version == '16.0' %}3.10{% elif odoo_version == '17.0' %}3.11{% else %}3.12{% endif %}"
   choices:
     - "3.10"
@@ -51,10 +52,12 @@ python_version:
     - "3.12"
     - "3.13"
     - "3.14"
+  # odoo/release.py MIN_PY_VERSION: odoo/init.py asserts it, so Odoo 20 dies on import on anything older
+  validator: "{% if odoo_version == '20.0' and python_version in ['3.10', '3.11'] %}Odoo 20 needs Python 3.12 or newer{% endif %}"
 
 postgres_version:
   type: int
-  help: PostgreSQL major version (project-local cluster)
+  help: PostgreSQL major version (project-local cluster; Odoo 20 needs 16 or newer)
   default: "{% if odoo_version in ['16.0', '17.0'] %}15{% else %}17{% endif %}"
   choices:
     - 13
@@ -63,6 +66,8 @@ postgres_version:
     - 16
     - 17
     - 18
+  # odoo/release.py MIN_PG_VERSION: Odoo 20 only warns on an older server, then runs unsupported
+  validator: "{% if odoo_version == '20.0' and postgres_version | int < 16 %}Odoo 20 needs PostgreSQL 16 or newer{% endif %}"
 
 # --- ports / database (defaults derived from the Odoo major version) ---
 
