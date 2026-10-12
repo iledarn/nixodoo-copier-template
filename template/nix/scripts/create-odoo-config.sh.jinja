@@ -25,7 +25,6 @@ DB_PORT="${PGPORT}"
 DB_USER="${PGUSER}"
 HTTP_PORT="${ODOO_HTTP_PORT}"
 LP_PORT="${ODOO_GEVENT_PORT}"
-REPORT_URL="http://127.0.0.1:$HTTP_PORT"
 ADMIN_PASSWD="$(head -c 24 /dev/urandom | base64 | tr -d '+/=')"
 
 cat > "$CONF_PATH" << ODOO_EOF
@@ -49,7 +48,6 @@ limit_time_real_cron = -1
 {% if odoo_major | int >= 17 %}gevent_port = $LP_PORT{% else %}longpolling_port = $LP_PORT{% endif +%}
 max_cron_threads = 1
 proxy_mode = True
-report_url = $REPORT_URL
 server_wide_modules = base,web{% if use_queue_job %},queue_job{% endif +%}
 workers = 4
 {% if use_queue_job %}
