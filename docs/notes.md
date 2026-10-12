@@ -53,3 +53,10 @@ Things that surprised somebody once, kept out of [the README](../README.md) so i
   ~600 % CPU, an OOM-killed editor, and a repack that restarts from scratch on the next launch.
   The generated README carries the caps and the capped `systemd-run` pack under
   [Entire and git auto-gc](../template/README.md.jinja).
+- A worktree session's `odoo.conf` is written by `wt-start.sh`, not by `create-odoo-config`,
+  so it follows the answers on its own: `queue_job` in `server_wide_modules` only with
+  `use_queue_job`, `gevent_port` from Odoo 17 (`longpolling_port` before), the database role
+  from `db_user` / `db_password`. Reports read the `report.url` system parameter, not any
+  config option, so `wt-start` pins it to the session's own `http://127.0.0.1:<port>`; without
+  it a session on a restored production dump renders reports against the dump's
+  `web.base.url`, i.e. production. Corpus: `python3 tests/test_wt_start_conf.py`.
