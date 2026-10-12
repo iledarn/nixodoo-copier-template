@@ -88,6 +88,13 @@ describe('rules', () => {
     expect(taskKeyIn('run the pipeline for KIO-1834 please')).toBe('KIO-1834')
   })
 
+  test('a product code is no task key: task numbers carry no leading zero', () => {
+    expect(taskKeysIn('KIO-1791 ON HAND OF RAW-000010 PURGING COMPOUND, ASM-001640')).toEqual(['KIO-1791'])
+    expect(taskKeyIn('RAW-000010 Purging Compound')).toBe('')
+    const run = addTasks(newRun('KIO-1791', 0), ['KIO-1791'], 0)
+    expect(addTasks(run, ['CAP-000059 capacitor'], 1)).toBe(run)
+  })
+
   test('a block: its keys, titles and states', async () => {
     expect(taskKeysIn('block KIO-1844, KIO-1845 and KIO-1441, again KIO-1844')).toEqual(['KIO-1844', 'KIO-1845', 'KIO-1441'])
     let run = addTasks(newRun('KIO-1', 0), ['KIO-1', 'kio-2 rename the field', 'not a key'], 1)
@@ -300,6 +307,16 @@ test('text typed under Other reaches the agent and keeps the gate shut', async (
   const phase = await $.tool.call({ tool: 'mcp__pipeline-gates__phase', phase: 2 })
   expect(String(phase.result)).toContain('the user wrote: "rename the field first"')
   expect((await $.tool.call(DEV)).deny).toContain('grill alignment gate is closed')
+})
+
+test('a product code named beside the task does not join the block', async ($, on) => {
+  engine(on)
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  const args = 'KIO-1791 - Explain why Consumable products show no On Hand quantity (RAW-000010 Purging Compound)'
+  await $.tool.call({ tool: 'Skill', skill: 'pipeline', args })
+  const gates = String((await $.tool.call({ tool: 'mcp__pipeline-gates__gates' })).result)
+  expect(gates).toContain('pipeline KIO-1791 ·')
+  expect(gates).not.toContain('tasks:')
 })
 
 test('a block is one run: its tasks keep the gates, and the pane and band show how far it got', async ($, on) => {

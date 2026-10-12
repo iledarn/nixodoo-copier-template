@@ -30,7 +30,9 @@ const WORKTREE = /\/\.worktrees\/(?!_env\/)[A-Za-z0-9][A-Za-z0-9._-]*\//
 const DOC_PATH = /\/readme\/|\/README\.(?:rst|md)$|\/static\/description\/|\.puml$/
 const TEST_SUMMARY = /(\d+) failed, (\d+) error\(s\) of (\d+) tests/g
 const PR_CREATE = /\bgh\s+pr\s+create\b/
-const TASK_KEY = /\b[A-Z][A-Z0-9]{1,9}-\d+\b/
+// project_key numbers a project's tasks from an unpadded sequence, so a key's number never starts
+// with 0; product codes are zero-padded (RAW-000010, ASM-001640) and stay out of the block
+const TASK_KEY = /\b[A-Z][A-Z0-9]{1,9}-[1-9]\d*\b/
 
 export function newRun(task: string, now: number, hasStatusGate = true): Run {
   return {
