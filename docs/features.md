@@ -48,7 +48,8 @@ The full inventory behind the summary in [the README](../README.md#what-it-gener
 - **Claude Code mods** (function-hook plugins under `.claude/skills/<name>/`, loaded in a
   trusted workspace): **odoo-env-band**, a row above the prompt with the checkouts this
   session works in (env repo, addons, its worktree env: branch, changes, ahead/behind, port)
-  and the odoo / postgres / nginx services, every segment explained on hover;
+  and the odoo / postgres / nginx services, a bar between each two groups, every segment
+  explained on hover once its `?` toggle is on (off by default, kept across sessions);
   **deploy-watch**, the deploy skill's T+60 re-check as a timer that survives a restart,
   with a countdown, run-now and cancel; **redact-secrets**, passwords, tokens, keys and URL
   credentials masked in tool output before the model reads it and before the transcript
