@@ -32,8 +32,9 @@ overrides the node (list mode only).
 {% if tickets_mcp == 'odoo' %}
 ## Fixed plumbing
 
-- **Prod RPC:** odoo MCP `connect` with `env_profile: "prod"` (reads
-  `ODOO_*_PROD` from `.env` server-side; secrets never enter tool calls).
+- **Prod RPC:** the Odoo connector (claude.ai, signed in as the user; no connect
+  step, no secrets anywhere in the project). Missing or asking to authenticate →
+  tell the user to (re)connect it in their Claude settings.
 - **Task link template:** `{{ odoo_prod_url }}/web#id=<id>&model=project.task&view_type=form`
 - **Ticket reference (display):** always show the {{ ticket_prefix }} key (`key` field, e.g.
   `{{ ticket_prefix }}-1064`) + title — **never the numeric database id**. The id is used only
@@ -44,10 +45,7 @@ overrides the node (list mode only).
 
 ## Steps — list mode
 
-1. `mcp__odoo__connect` `env_profile: "prod"`.
-   - If the schema lacks `env_profile` or connect errors on `Journal Item` —
-     server predates `12fad1e`/`1560bec` in `okolovmark/odoo-fast-mcp`: use
-     the Python fallback below; `uv cache clean odoo-fast-mcp` for next time.
+1. The Odoo connector is there (`get_connection_status`); if not, stop and say so.
 2. Resolve uid: `search_read` `res.users`, `[["login", "=", "<login>"]]`,
    fields `["id", "name"]`; empty → retry on `email`; still empty → stop, say so.
 3. Open tasks: `search_read` `project.task`,
@@ -58,13 +56,10 @@ overrides the node (list mode only).
    `<key> name — stage — deadline` (e.g. `{{ ticket_prefix }}-1064 …`) + `⚠️ overdue` / `⭐`
    (priority `"1"`) / `⛔` (kanban_state `"blocked"`), each linked. **Never show
    the numeric id.** No tasks → say exactly that.
-5. Restore: `connect` `env_profile: "default"`. Local down →
-   `mcp__odoo__disconnect` and mention it (a failed connect keeps the
-   previous session, so prod would silently stay active otherwise).
 
 ## Steps — send mode
 
-1–2. Same connect + uid resolution as list mode.
+1–2. Same connector check + uid resolution as list mode.
 3. **Candidate tasks** = all open tasks, ordered by **sequence** (manual
    board/priority order):
    `search_read` `project.task`,
@@ -114,7 +109,7 @@ overrides the node (list mode only).
    `mcp__claude_ai_Microsoft_365__teams_send_chat_message` to the identity
    node's status chatId, `bodyType: "html"`. ChatId errors → re-resolve by topic via
    `mcp__claude_ai_Microsoft_365__teams_list_chats`, update the identity node.
-8. Restore the connection (list-mode step 5). Report the message id.
+8. Report the message id.
 
 ## Steps — rebalance mode
 
@@ -123,7 +118,7 @@ ticket in Development, or the user adding/expanding one), so the existing
 deadlines are now unrealistic. This mode **writes** — keep it inside the scope
 guard (step 8).
 
-1–2. Same connect + uid resolution as list mode.
+1–2. Same connector check + uid resolution as list mode.
 3. **Candidate tasks** = all open assigned tasks ordered by **sequence** — same
    `search_read` as send-mode step 3, fields incl. `planned_date_start`,
    `planned_date_end`, `date_deadline`, `planned_hours`, `effective_hours`,
@@ -158,7 +153,7 @@ guard (step 8).
    the before→after diff (one `execute` `write` per task, or batched by
    identical vals) — do not block the run on a per-time confirmation. When
    invoked **manually** (`rebalance` arg), show the proposed before→after table
-   first and apply on the user's go. Writes use `mcp__odoo__execute` with the
+   first and apply on the user's go. Writes use the connector's `execute` with the
    quiet context `{"mail_create_nolog": true, "mail_create_nosubscribe": true,
    "mail_auto_subscribe_no_notify": true, "tracking_disable": true}`
    (`date_deadline` is tracked).
@@ -168,45 +163,10 @@ guard (step 8).
    / `tshirt_estimate` fields; never another person's tasks, never any other
    field, never closed tasks. Report each change as `<{{ ticket_prefix }} key> <name>:
    <old planned_date_end> → <new planned_date_end>` (the Planned Dates window).
-9. Restore the connection (list-mode step 5).
-
-## Python fallback (MCP unavailable or pre-fix)
-
-Keeps the password out of the transcript (`source`d, not pasted):
-
-```bash
-set -a; source "${{ project_dir_var }}/.env"; set +a
-python3 - <<'PY'
-import json, os, urllib.request
-URL = os.environ["ODOO_URL_PROD"].rstrip("/") + "/jsonrpc"
-DB, USER, PWD = (os.environ[k] for k in
-                 ("ODOO_DATABASE_PROD", "ODOO_USERNAME_PROD", "ODOO_PASSWORD_PROD"))
-def rpc(service, method, args):
-    payload = {"jsonrpc": "2.0", "method": "call",
-               "params": {"service": service, "method": method, "args": args}, "id": 1}
-    req = urllib.request.Request(URL, json.dumps(payload).encode(),
-                                 {"Content-Type": "application/json"})
-    r = json.load(urllib.request.urlopen(req, timeout=60))
-    if r.get("error"):
-        raise SystemExit("RPC ERROR: " + json.dumps(r["error"], ensure_ascii=False)[:1500])
-    return r["result"]
-uid = rpc("common", "login", [DB, USER, PWD])
-def kw(model, method, args, kwargs=None):
-    return rpc("object", "execute_kw", [DB, uid, PWD, model, method, args, kwargs or {}])
-me = kw("res.users", "search_read", [[["login", "=", "<login from user_identity>"]]],
-        {"fields": ["id", "name"]})[0]
-tasks = kw("project.task", "search_read",
-           [[["user_ids", "in", [me["id"]]], ["is_closed", "=", False]]],
-           {"fields": ["name", "project_id", "stage_id", "date_deadline",
-                       "priority", "kanban_state"],
-            "order": "date_deadline asc, priority desc"})
-print(json.dumps(tasks, ensure_ascii=False, indent=1))
-PY
-```
 
 ## Write rules
 
-- Odoo: **list** and **send** are read-only — only `connect` / `search_read` /
+- Odoo: **list** and **send** are read-only — only `search_read` /
   `fields_get`. The **single** write path is **rebalance**, and only within its
   scope guard (rebalance step 8): `planned_date_start` / `planned_date_end` /
   `date_deadline` / `planned_hours` / `tshirt_estimate` on the user's **own**

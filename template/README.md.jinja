@@ -57,9 +57,13 @@ Two things that cost hours if unknown:
 curl -fsSL https://claude.ai/install.sh | bash
 ```
 
-The project ships Claude Code integration: `CLAUDE.md` (project facts), `.claude/`
-(guard hooks, Odoo dev skills, `dev`/`review` agents) and `.mcp.json`
-(the odoo MCP server, driven by `.env`).
+The project ships Claude Code integration: `CLAUDE.md` (project facts) and `.claude/`
+(guard hooks, Odoo dev skills, `dev`/`review` agents).
+{% if tickets_mcp == 'odoo' %}
+Production Odoo is reached through the claude.ai Odoo connector, which each
+developer connects in claude.ai settings with their own account; nothing in the
+project holds a prod credential.
+{% endif %}
 
 {% if use_kb %}Claude's persistent memory for this project lives in
 [kb](https://github.com/okolovmark/kb): records, tasks and one record per session, in Neo4j.
@@ -236,11 +240,12 @@ The `.env` file contains these default values:
 | `ODOO_GEVENT_PORT` | {{ odoo_gevent_port }} | Odoo {% if odoo_major | int >= 17 %}gevent websocket{% else %}longpolling{% endif %} port |
 | `ODOO_NGINX_PORT` | {{ nginx_port }} | Nginx proxy port |
 | `EDITOR` | nano | Preferred text editor |
-| `ODOO_URL` | `http://localhost:{{ nginx_port }}` | Odoo URL via Nginx (for external tools) |
-| `ODOO_DATABASE` | {{ db_name }} | Odoo database name (for external tools) |
-| `ODOO_USERNAME` | admin | Odoo admin username (for external tools) |
-| `ODOO_PASSWORD` | admin | Odoo admin password (for external tools) |
-| `ODOO_TIMEOUT` | 30 | Odoo connection timeout (for external tools) |
+{% if tickets_mcp == 'odoo' and not use_kb %}
+| `ODOO_URL_PROD` | {{ odoo_prod_url }} | Production Odoo, read by the standup hook |
+| `ODOO_DATABASE_PROD` | | Production database |
+| `ODOO_USERNAME_PROD` | | Your own production login |
+| `ODOO_PASSWORD_PROD` | | Your own API key (Preferences → Account Security) |
+{% endif %}
 
 ### Configuration Files
 
@@ -305,6 +310,79 @@ systemctl --user restart odoo{{ service_suffix }}.service
 
 ## Local Server
 
+{% if dev_in_worktrees %}
+### Quick Setup For Development
+
+There is no main Odoo, no Nginx and no main database in development: every task
+runs in its own worktree env (`.claude/skills/worktree-env`), with its own Odoo on
+its own port and its own restore of the prod dump in the shared PostgreSQL cluster.
+
+This will:
+
+1. Create `.env` file with configuration
+1. Clone/update all repositories
+1. Initialize the PostgreSQL cluster and its service
+{% if backup_s3_bucket %}
+1. Configure AWS credentials (for the prod dump)
+{% endif %}
+{% if prod_ssh_host %}
+1. Setup SSH access for servers
+{% endif %}
+{% if editor == 'vscode' %}
+1. Create VSCode settings
+{% endif %}
+
+```bash
+cd {{ project_name }}
+
+# Run full setup
+nix run .#setup-dev
+
+# Lock python dependencies from src/odoo/requirements.txt
+nix run .#bootstrap-deps
+
+# INSTALL PERMANENTLY TO YOUR SYSTEM
+{% if service_suffix %}mkdir -p ~/.local/state/nix/profiles && {% endif %}nix profile add {{ nix_profile_flag }}.#dev-server
+
+# The PostgreSQL cluster every worktree env's database lives in
+systemctl --user enable --now postgres{{ service_suffix }}.service
+{% if backup_s3_bucket %}
+
+# Fetch the newest prod dump into backup/ (each worktree env restores its own copy)
+nix run .#download-backup
+{% endif %}
+
+# A worktree env per task: start (idempotent), list, stop
+bash .claude/skills/worktree-env/scripts/wt-start.sh <slug>     # prints URL, CONF, DB, PORT
+bash .claude/skills/worktree-env/scripts/wt-list.sh
+bash .claude/skills/worktree-env/scripts/wt-stop.sh <slug>
+
+# Logs:
+tail -f ${{ project_dir_var }}/.postgres/log/postgresql.log | ccze -A
+tail -f ${{ project_dir_var }}/.worktrees/_env/<slug>/odoo.log | ccze -A
+
+# Odoo update module / shell on a session:
+{{ odoo_cmd }} -c ${{ project_dir_var }}/.worktrees/_env/<slug>/odoo.conf -u module_name --workers 0 --stop-after-init --logfile=
+{{ odoo_cmd }} shell -c ${{ project_dir_var }}/.worktrees/_env/<slug>/odoo.conf --workers 0 --no-http
+{% if prod_ssh_host %}
+
+# Connect to remote servers:
+{% if test_ssh_hosts %}
+test-server <alias>     # one of: {{ test_ssh_hosts | join(', ') }}
+{% endif %}
+prod-server
+{% endif %}
+
+# help message with all commands and URLs:
+welcome-message
+```
+
+### Development URLs
+
+- **A worktree env:** `http://wt_<slug>.localhost:<port>/web` — the database is the
+  subdomain; `http://wt_<slug>.<user>.localhost:<port>` is a second login side by side.
+
+{% else %}
 ### Quick Setup For Development
 
 This will:
@@ -431,6 +509,7 @@ nix run .#create-vscode-settings
 - **Odoo Direct:** <http://localhost:{{ odoo_http_port }}>
 - **Odoo via Nginx:** <http://localhost:{{ nginx_port }}>
 
+{% endif %}
 ## Test Server
 
 For test server deployment with nginx and systemd service:

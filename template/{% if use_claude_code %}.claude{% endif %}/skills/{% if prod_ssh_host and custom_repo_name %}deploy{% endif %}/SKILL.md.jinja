@@ -516,8 +516,8 @@ later. After Step 7, post an internal note to the task(s) the PR closes.
 - **Task(s)** = the `{{ ticket_prefix }}-xxxx` key(s) captured in Step 1 — resolve each to a
   task id (`odoo-tickets` → Resolve a ticket). No key found → tell the user and
   skip; never guess a task.
-- **Connect** the odoo MCP `env_profile: "prod"`, post, then restore `default`
-  (`odoo-tickets` → Connection & context flags).
+- **Through** the Odoo connector (production, signed in as you; `odoo-tickets` →
+  Connection & context flags).
 - **Post** per `odoo-tickets` (Internal notes — `message_post` with the identity
   node's author fields + quiet context). Body = host, modules, result (exit
   code{% if use_queue_job %} + requeued count{% endif %}), PR link, and the **commands verbatim** in a

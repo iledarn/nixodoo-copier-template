@@ -15,11 +15,8 @@ import type { Where } from './env'
 import { ADDONS, ADDONS_BRANCH, ANSWERS_FILE, ENV_BRANCHES, PORTS, SERVICE_SUFFIX } from './config'
 
 const REFRESH_MS = 20_000
-const SERVICES = [
-  { name: 'odoo', unit: `odoo${SERVICE_SUFFIX}.service`, port: PORTS.odoo },
-  { name: 'pg', unit: `postgres${SERVICE_SUFFIX}.service`, port: PORTS.pg },
-  { name: 'nginx', unit: `nginx${SERVICE_SUFFIX}.service`, port: PORTS.nginx },
-] as const
+// the one service outside the worktree envs: the postgres cluster holding every wt_* database
+const SERVICES = [{ name: 'pg', unit: `postgres${SERVICE_SUFFIX}.service`, port: PORTS.pg }] as const
 
 const snapshot = atom({ plugin: 'odoo-env-band', key: 'snapshot' } as const, null)
 const touched = atom({ plugin: 'odoo-env-band', key: 'touched' } as const, { env: false, addons: false, wts: [] })
@@ -88,6 +85,15 @@ async function collect($: EngineInterface): Promise<EnvSnapshot> {
     services,
     wts,
   }
+}
+
+// a worktree env's address: its database is the subdomain
+const address = (wt: WtEnv) => `${wt.db}.localhost:${wt.port}`
+const webUrl = (wt: WtEnv) => `http://${address(wt)}/web`
+
+async function openUrl($: EngineInterface, url: string): Promise<void> {
+  const run = await $.process.run(['xdg-open', url], { timeoutMs: 10_000 })
+  if (run.exitCode !== 0) $.ui.toast(`odoo-env-band: xdg-open ${url} failed: ${run.stderr.trim() || run.exitCode}`)
 }
 
 let running: Promise<void> | null = null
@@ -162,7 +168,7 @@ export const register: Register = on => {
     const env = await read($, snapshot)
     if (env === null || e.props.hasSurvey) return below
 
-    const { Box, Text } = $.ui.resolve(e)
+    const { Box, Button, Link, Text } = $.ui.resolve(e)
     const mine = env.wts.filter(wt => wt.isMine)
     const others = env.wts.filter(wt => !wt.isMine)
 
@@ -186,8 +192,16 @@ export const register: Register = on => {
         </Box>
       )
 
-    // one group per checkout (a worktree's port and state right after its label), the main services, the other envs
+    // the postgres cluster first, then one group per checkout (a worktree's port and state right after its
+    // label, its address last), then the other envs
     const groups: JSX.Element[] = [
+      <Box flexDirection="row" columnGap={1}>
+        {env.services.map(service => (
+          <Text color={service.isActive ? 'green' : 'red'}>
+            {`${service.name} :${service.port} ${service.isActive ? '●' : '○'}`}
+          </Text>
+        ))}
+      </Box>,
       ...(env.env === null
         ? []
         : [
@@ -211,15 +225,15 @@ export const register: Register = on => {
             {`:${wt.port} ${wt.isActive ? '● up' : '○ down'}`}
           </Text>
           {gitState(wt.git, [ADDONS_BRANCH], true)}
+          {/* the session is served by its database's subdomain (dbfilter ^%d$); a remote surface draws only an
+              https: Link as a link, so there the address is a button that opens the browser */}
+          {e.surface === 'terminal' ? (
+            <Link href={webUrl(wt)} label={address(wt)} />
+          ) : (
+            <Button key={`wt-open-${wt.slug}`} label={address(wt)} plain dimColor onPress={() => openUrl($, webUrl(wt))} />
+          )}
         </Box>
       )),
-      <Box flexDirection="row" columnGap={1}>
-        {env.services.map(service => (
-          <Text color={service.isActive ? 'green' : 'red'}>
-            {`${service.name} :${service.port} ${service.isActive ? '●' : '○'}`}
-          </Text>
-        ))}
-      </Box>,
       ...(others.length === 0
         ? []
         : [

@@ -20,7 +20,7 @@ each leaves an artifact (a test, a script, a log excerpt) that goes to the ticke
 ## Channel 1 — targeted test (preferred)
 
 ```bash
-{{ odoo_cmd }} -c ${{ project_dir_var }}/odoo.conf --workers 0 --stop-after-init --logfile= \
+{{ odoo_cmd }} -c {% if dev_in_worktrees %}${{ project_dir_var }}/.worktrees/_env/<slug>/odoo.conf{% else %}${{ project_dir_var }}/odoo.conf{% endif %} --workers 0 --stop-after-init --logfile= \
     --http-port <free port> --test-enable --test-tags /{{ module_prefix }}_<module>:TestX.test_y
 ```
 
@@ -39,7 +39,7 @@ each leaves an artifact (a test, a script, a log excerpt) that goes to the ticke
 ## Channel 2 — {{ odoo_cmd }} shell script
 
 ```bash
-{{ odoo_cmd }} shell -c ${{ project_dir_var }}/odoo.conf --workers 0 --stop-after-init < probe.py
+{{ odoo_cmd }} shell -c {% if dev_in_worktrees %}${{ project_dir_var }}/.worktrees/_env/<slug>/odoo.conf{% else %}${{ project_dir_var }}/odoo.conf{% endif %} --workers 0 --stop-after-init < probe.py
 ```
 
 - Print, don't reason from memory: `record.read([...])`, `record.mapped(...)`,
@@ -105,5 +105,8 @@ before believing "the code is broken":
   because saving sends the change inside the parent's vals.
 - **Float equality on UoM/currency round-trips**: `30.000000000000004 != 30.0`
   — compare with `float_compare`/tolerance or a correct fix reads as broken.
-- **Triggering over RPC** (odoo MCP `execute`) runs as the MCP user with its
-  companies — not the user who reported the bug.
+- **Triggering over RPC** ({% if tickets_mcp == 'odoo' %}the Odoo connector's `execute`, on production{% else %}any RPC client{% endif %}) runs as the
+  signed-in user with their companies — not the user who reported the bug.
+{% if dev_in_worktrees %}
+  In a worktree env, reproduce as that user from `{{ odoo_cmd }} shell` with `with_user()`.
+{% endif %}

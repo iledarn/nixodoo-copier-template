@@ -62,7 +62,8 @@ db_name = $DB
 db_password = {{ db_password }}
 db_port = {{ postgres_port }}
 db_user = {{ db_user }}
-dbfilter = ^${DB}\$
+dbfilter = ^%d\$
+http_interface = ::1
 http_port = $PORT
 limit_memory_soft = 4294967296
 limit_memory_hard = 5368709120
@@ -78,22 +79,22 @@ workers = 0
 EOF
 
 bash "$WT_SCRIPT_DIR/wt-restore.sh" "$SLUG"
-mkdir -p "$DATA_DIR/filestore/$DB"
-cp -an "$SEED_FILESTORE/." "$DATA_DIR/filestore/$DB/" 2>/dev/null || true
 
 # Pin the host wkhtmltopdf resolves report assets against. report.url wins over
 # web.base.url in ir_actions_report._get_report_url, and the conf's report_url is
 # NOT a core option (nothing reads it) — this param is the only thing that keeps
-# rendering off THIS env. Explicit IPv4: `localhost` resolves to ::1 here, which
-# Odoo's IPv4-only listener refuses. Runs on the reused-DB path too (wt-restore
-# early-exits there), and before the restart so no ormcache holds the old value.
-$PSQL -q -d "$DB" -c "INSERT INTO ir_config_parameter (key, value) VALUES ('report.url', 'http://127.0.0.1:$PORT') ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;" >/dev/null
+# rendering off THIS env. The host carries the DB name for dbfilter ^%d$, and
+# resolves to ::1 — hence http_interface = ::1: loopback only, so a neutralized
+# prod copy with admin/admin is never reachable from the LAN. Runs on the
+# reused-DB path too (wt-restore early-exits there), and before the restart so no
+# ormcache holds the old value.
+$PSQL -q -d "$DB" -c "INSERT INTO ir_config_parameter (key, value) VALUES ('report.url', 'http://$DB.localhost:$PORT') ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;" >/dev/null
 
 systemctl --user restart "odoo{{ service_suffix }}-wt@$SLUG.service"
 
 echo "WORKTREE: $WT_PATH"
 echo "BRANCH: $SLUG"
-echo "URL: http://localhost:$PORT/web"
+echo "URL: http://$DB.localhost:$PORT/web"
 echo "CONF: $CONF"
 echo "DB: $DB"
 echo "PORT: $PORT"

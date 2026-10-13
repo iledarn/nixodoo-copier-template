@@ -12,8 +12,8 @@ The full inventory behind the summary in [the README](../README.md#what-it-gener
 - Pinnable source management: `repos.yaml` (odoo) + `addons.yaml` (OCA/custom addon repos,
   branch- or commit-pinned) with an addons symlink farm builder
 - Generated configs: `.env`, `odoo.conf` (random master password), systemd user units incl.
-  daily log rotation, and an nginx reverse proxy for dev/test only (`prod-server` ships no
-  proxy - production keeps its own front end)
+  daily log rotation, and an nginx reverse proxy for test only, and dev without worktree envs
+  (`prod-server` ships no proxy - production keeps its own front end)
 - Python deps imported straight from Odoo's own `requirements.txt` and locked with `uv`
 - **Claude Code integration** (optional): `CLAUDE.md`, guard hooks (read-only OCA/core,
   dangerous-command blocker, ruff auto-format), Odoo dev skills (code patterns, style,
@@ -27,7 +27,7 @@ The full inventory behind the summary in [the README](../README.md#what-it-gener
   appetite agreed before options are drawn — and
   **domain-modeling**: a `CONTEXT.md` glossary of canonical terms mapped to Odoo
   models + `docs/adr/` decision records, both maintained as design conversations
-  resolve), `dev`/`review`/`verify`/`documenter` agents, MCP servers config, a persistent
+  resolve), `dev`/`review`/`verify`/`documenter` agents, a persistent
   **memory template** (journal / state / standup), and optional workflow skills:
   the **pipeline** orchestrator (task → dev → QC gate → docs → demo GIF → PR), **my-status**
   (status posting, Teams), **teams-message** (readable Teams messages: HTML Teams
@@ -47,8 +47,8 @@ The full inventory behind the summary in [the README](../README.md#what-it-gener
   your own closed tickets, not from gut feel)
 - **Claude Code mods** (function-hook plugins under `.claude/skills/<name>/`, loaded in a
   trusted workspace): **odoo-env-band**, a row above the prompt with the checkouts this
-  session works in (env repo, addons, its worktree env: branch, changes, ahead/behind, port)
-  and the odoo / postgres / nginx services, a worktree's port and state beside its label and a
+  session works in (env repo, addons, its worktree env: branch, changes, ahead/behind, port and
+  address) after the postgres cluster's state, a worktree's port and state beside its label and a
   bar between each two groups;
   **deploy-watch**, the deploy skill's T+60 re-check as a timer that survives a restart,
   with a countdown, run-now and cancel; **redact-secrets**, passwords, tokens, keys and URL

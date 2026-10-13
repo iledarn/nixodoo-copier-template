@@ -7,13 +7,16 @@ modules outside it, by Studio, or by hand. "Does this field exist, who owns
 it, how populated is it" is a DATABASE question, answered here.
 
 Usage:
-  dbfields.py <model.name>              every field of the model + fill rates
-  dbfields.py <model.name> <pattern>    only fields whose name matches
-  dbfields.py <pattern>                 which models carry a matching field
-                                        (no dot in the argument = this mode)
+  dbfields.py [--conf PATH] <model.name>              every field of the model + fill rates
+  dbfields.py [--conf PATH] <model.name> <pattern>    only fields whose name matches
+  dbfields.py [--conf PATH] <pattern>                 which models carry a matching field
+                                                      (no dot in the argument = this mode)
 
-Connection comes from odoo.conf at the project root, so this answers for the
-DATABASE THAT CONF POINTS AT (here: the local restore of the prod dump).
+The connection comes from an odoo.conf, and the answer is for THE DATABASE THAT
+CONF POINTS AT (a restore of the prod dump). Which conf, first match wins:
+--conf PATH; the worktree env the cwd is in (.worktrees/<slug>/ ->
+.worktrees/_env/<slug>/odoo.conf); odoo.conf at the project root; the most
+recently started worktree env. The database used is printed to stderr.
 """
 
 import configparser
@@ -31,10 +34,36 @@ ROOT = os.path.abspath(os.path.join(SKILL_DIR, "..", "..", ".."))
 FILL_CHUNK = 60
 
 
-def connect():
+def find_conf(explicit=None):
+    """The odoo.conf to read the database from, in the docstring's order."""
+    if explicit:
+        return explicit
+    worktrees = os.path.join(ROOT, ".worktrees")
+    rel = os.path.relpath(os.getcwd(), worktrees)
+    slug = rel.split(os.sep)[0]
+    if not rel.startswith("..") and slug not in (".", "_env"):
+        session = os.path.join(worktrees, "_env", slug, "odoo.conf")
+        if os.path.isfile(session):
+            return session
+    root = os.path.join(ROOT, "odoo.conf")
+    if os.path.isfile(root):
+        return root
+    envs = os.path.join(worktrees, "_env")
+    sessions = [
+        os.path.join(envs, name, "odoo.conf")
+        for name in (os.listdir(envs) if os.path.isdir(envs) else [])
+        if os.path.isfile(os.path.join(envs, name, "odoo.conf"))
+    ]
+    if not sessions:
+        sys.exit("dbfields.py: no odoo.conf: start a worktree env (worktree-env skill) or pass --conf")
+    return max(sessions, key=os.path.getmtime)
+
+
+def connect(conf):
     cfg = configparser.ConfigParser()
-    cfg.read(os.path.join(ROOT, "odoo.conf"))
+    cfg.read(conf)
     opt = cfg["options"]
+    print(f"dbfields.py: database {opt['db_name']} ({os.path.relpath(conf, ROOT)})", file=sys.stderr)
     return psycopg2.connect(
         host=opt.get("db_host", "localhost"),
         port=opt.get("db_port", "5432"),
@@ -121,9 +150,14 @@ def model_report(cr, model, pattern):
 
 def main():
     args = sys.argv[1:]
+    conf = None
+    if args[:1] == ["--conf"]:
+        if len(args) < 2:
+            sys.exit(__doc__.strip())
+        conf, args = args[1], args[2:]
     if not args or len(args) > 2:
         sys.exit(__doc__.strip())
-    conn = connect()
+    conn = connect(find_conf(conf))
     try:
         cr = conn.cursor()
         if "." in args[0]:

@@ -4,4 +4,4 @@ export const ADDONS = 'src/{{ custom_repo_name }}'
 export const ADDONS_BRANCH = '{{ odoo_version }}'
 export const ENV_BRANCHES: readonly string[] = ['main', 'master']
 export const SERVICE_SUFFIX = '{{ service_suffix }}'
-export const PORTS = { odoo: '{{ odoo_http_port }}', pg: '{{ postgres_port }}', nginx: '{{ nginx_port }}' } as const
+export const PORTS = { pg: '{{ postgres_port }}' } as const

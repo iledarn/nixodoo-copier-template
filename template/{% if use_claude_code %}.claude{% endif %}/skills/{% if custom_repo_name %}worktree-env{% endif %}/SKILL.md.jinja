@@ -1,22 +1,24 @@
 ---
 name: worktree-env
-description: "Spin up / list / tear down isolated per-session Odoo {{ odoo_version }} dev environments, each backed by a git worktree of the addons repo with its own port, database (own restore of the prod dump), data_dir and systemd service — so many tasks run in parallel without touching each other or the main develop env. Used by the pipeline skill and standalone. Use when asked to start/stop an isolated env, work on a task in parallel, or run something against a throwaway Odoo."
+description: "Spin up / list / tear down isolated per-session Odoo {{ odoo_version }} dev environments, each backed by a git worktree of the addons repo with its own port, database (own restore of the prod dump), data_dir and systemd service — so many tasks run in parallel without touching each other. There is no main env: every task runs in one. Used by the pipeline skill and standalone. Use when asked to start/stop an isolated env, work on a task in parallel, or run something against a throwaway Odoo."
 argument-hint: "[start|stop|list] [slug]"
 ---
 
 # Worktree Dev Environments
 
 Per-session isolated Odoo envs. Each run is keyed by a task `<slug>` and gets its
-own worktree + port + DB + data_dir + systemd unit. Many can run in parallel; none
-touch the user's main env (`src/{{ custom_repo_name }}` / `{{ db_name }}` / `odoo{{ service_suffix }}.service` / 1669).
+own worktree + port + DB + data_dir + systemd unit. Many can run in parallel. This
+is the only place Odoo runs in development: there is no main Odoo, no reverse
+proxy and no main database, only the shared postgres cluster
+(`postgres{{ service_suffix }}.service`, :{{ postgres_port }}) that holds every session's DB.
 
-| | Main (user's) | Session `<slug>` |
-|---|---|---|
-| Code | `src/{{ custom_repo_name }}` | `.worktrees/<slug>` (branch off `origin/{{ odoo_version }}`) |
-| Runtime | `odoo.conf` | `.worktrees/_env/<slug>/{odoo.conf,data,port}` |
-| Service | `odoo{{ service_suffix }}.service` | `odoo{{ service_suffix }}-wt@<slug>.service` |
-| DB | `{{ db_name }}` | `wt_<slug>` (own restore of the prod dump) |
-| HTTP | nginx {{ nginx_port }} → {{ odoo_http_port }} | auto-allocated in **{{ (odoo_major | int + 11) * 100 }}–{{ (odoo_major | int + 11) * 100 + 99 }}** (direct, no nginx) |
+| | Session `<slug>` |
+|---|---|
+| Code | `.worktrees/<slug>` (branch off `origin/{{ odoo_version }}` in `src/{{ custom_repo_name }}`) |
+| Runtime | `.worktrees/_env/<slug>/{odoo.conf,data,port}` |
+| Service | `odoo{{ service_suffix }}-wt@<slug>.service` |
+| DB | `wt_<slug>` (own restore of the prod dump) |
+| HTTP | `http://wt_<slug>.localhost:<PORT>`, port auto-allocated in **{{ (odoo_major | int + 11) * 100 }}–{{ (odoo_major | int + 11) * 100 + 99 }}** (direct, no nginx) |
 
 ## Commands
 
@@ -33,7 +35,7 @@ Invoke by absolute path under `${{ project_dir_var }}/.claude/skills/worktree-en
   worktree is kept (worktree + env + DB) and reported so no work is lost.
 - **`wt-list.sh`** — table of all active envs (slug / port / DB / service / dirty).
 - `wt-bootstrap.sh` — one-time, light: installs the `odoo{{ service_suffix }}-wt@.service` template unit
-  and checks the seed dump is present. **No DB work; never stops `odoo{{ service_suffix }}.service`.**
+  and checks the seed dump is present. **No DB work.**
   `wt-start.sh` calls it automatically.
 - `wt-link.sh <tree> <farm>` / `wt-restore.sh <slug>` — internals used by `wt-start`.
 
@@ -50,9 +52,9 @@ the `URL`. "what envs are running" → `wt-list.sh`. "tear down kio-1234" →
 Each session restores `backup/*.dump` (a raw prod dump) into its own DB.
 {% if backup_s3_bucket %}
 Fetch / refresh it with **`nix run .#download-backup`** — that app `aws s3 cp`s the
-latest prod dump into `backup/`. With the shared cluster already running it restores
-in place (no `pg_ctl`) and only drops/recreates its **target** DB (default `{{ db_name }}`),
-so active sessions are unaffected. If `wt-start` reports no dump, ask the user to
+latest prod dump into `backup/` and stops there (no `odoo.conf` in the project, so no
+restore of its own). Sessions already running keep their DBs; the next `wt-start`
+of a new slug restores the new dump. If `wt-start` reports no dump, ask the user to
 run it once first.
 {% else %}
 Place a prod dump into `backup/` manually (any `*.dump` produced by `pg_dump -Fc`);
@@ -77,13 +79,37 @@ the newest file is used. If `wt-start` reports no dump, ask the user to drop one
   visible banner), then the shared `nix/scripts/dev-fixup.sql` (admin → `admin`/`admin`,
   requeue stuck queue jobs, bump the document sequences past the names the dump
   already carries — imported picking/MO names sit above the sequence, so the Nth
-  create would collide on `stock_picking_name_uniq`){% if backup_s3_bucket %} — same pair `nix run .#download-backup` uses{% endif %}.
+  create would collide on `stock_picking_name_uniq`).
 - **Concurrency:** port allocation + `git worktree add` run under `flock`
   (`.worktrees/.wt.lock`); the slow `pg_restore` runs outside the lock so parallel
   starts overlap. DBs/ports/worktrees are per-slug, so sessions never collide.
-- **Runtime:** sessions run `workers = 0`, `max_cron_threads = 0` (light, no
-  nginx/websocket juggling). The `queue_job` runner still starts in threaded mode
-  against the session DB — jobs process normally and isolated.
+- **Runtime:** sessions run `workers = 0`, `max_cron_threads = 0`. In this threaded
+  mode Odoo serves the bus websocket (`/websocket`) on the session's own HTTP port,
+  so live updates, chat and notifications work with no nginx and no evented port;
+  only the prod layout (workers + evented port behind a proxy) cannot be reproduced
+  here. The `queue_job` runner still starts in threaded mode against the session
+  DB — jobs process normally and isolated.
+- **The DB name is the subdomain:** sessions run `dbfilter = ^%d$`, so `<URL>` is
+  `http://wt_<slug>.localhost:<PORT>` and bare `localhost:<PORT>` lands on the DB
+  selector. The point is the browser: cookies are per host, not per port, so two
+  sessions opened on bare `localhost` would share one `session_id` and log each
+  other out. RPC with an explicit database ignores dbfilter and works on any host.
+  `*.localhost` resolves to `::1`, so sessions listen on the IPv6 loopback only
+  (`http_interface = ::1`): reachable from this machine, never from the LAN (the
+  session DB is a prod copy with `admin`/`admin`); a client that asks for
+  `127.0.0.1` gets a refused connection. `wt-start.sh` pins `report.url` (what
+  wkhtmltopdf resolves report assets against) to `<URL>`'s host.
+- **Several users side by side in one browser — add a label after the DB name:**
+  `%d` is only the host's *first* label, while the `session_id` cookie is host-only
+  (keyed on the full host). So `http://wt_<slug>.<user>.localhost:<PORT>` opens the
+  same DB with its own login, next to `<URL>`: e.g. admin on `wt_<slug>.localhost`
+  and the reporting user on `wt_<slug>.<user>.localhost`. No conf change, no hosts
+  entry (`*.localhost` at any depth is loopback). This is the way to reproduce a
+  "user X can't do Y" report in a browser with no containers. To log in as a real
+  user, set a throwaway password on that user in the session DB (`odoo shell`:
+  `env['res.users'].browse(<uid>).password = '...'`, commit); the next restore
+  resets it. Limit: `report.url` stays pinned to `<URL>`, so wkhtmltopdf fetches
+  report assets with the main host's session.
 - **A test run takes the session's port unless told otherwise.** With the
   session service stopped for a CLI test run, the test server binds the port in
   the session `odoo.conf`, and a browser tab still open on `<URL>` - logged in,
@@ -91,17 +117,15 @@ the newest file is used. If `wt-start` reports no dump, ask the user to drop one
   transaction: tests die on state they never set, as the tab's user. Pass
   `--http-port <free port>` to every test run against a session, so such a tab
   gets a refused connection instead.
-- **Pointing the odoo MCP at a session:** `connect` to it explicitly —
-  `connect(host="localhost", port=<PORT>, database=<DB>, username="admin", password="admin")`.
-  The `default`/`prod` env profiles map to `{{ db_name }}`/prod (not a session), so pass
-  explicit host/port/db rather than a profile. The connection is global per MCP
-  server, so when alternating with prod ticket ops reconnect deliberately and check
-  `get_connection_status`. (Each Claude session has its own MCP server, so per-session
-  connections don't fight.)
+- **Reading or checking a session from Claude:** `{{ odoo_cmd }} shell -c <CONF> --no-http`
+  with a script on stdin (as a given user: `env = env(user=env.ref('base.user_admin'))`
+  or `record.with_user(user)`), or `psql -d wt_<slug>` for plain reads. There is no
+  local Odoo MCP; the Odoo connector is production, as your own account.
 - Cosmetic: every session shows Odoo's native neutralization banner (same on all) —
-  tell sessions apart by the port in `<URL>`.
-- Disk: each session DB is a full restore (a few GB) + ~75 MB filestore copy. Plenty
-  of headroom, but 5 parallel ≈ a handful of restores running at once.
+  tell sessions apart by the subdomain in `<URL>`.
+- Disk: each session DB is a full restore (a few GB); attachments are not seeded
+  (the dump carries the database, not the filestore). Plenty of headroom, but 5
+  parallel ≈ a handful of restores running at once.
 
 ## Files
 

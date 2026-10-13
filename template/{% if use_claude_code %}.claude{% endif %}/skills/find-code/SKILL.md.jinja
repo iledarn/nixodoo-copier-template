@@ -20,7 +20,7 @@ Three tools, no running Odoo needed:
 
 - `lsp.py` — client for the official **Odoo Language Server**. Point queries: definition, usages, hover, symbol search. Knows `_inherit`, MRO order, XML.
 - `inspect.py` — AST full-model map: every field/method from every inheriting module in one table.
-- `dbfields.py` — the DATABASE's view of fields: `ir.model.fields` + per-column fill rates against the DB `odoo.conf` points at. The only one of the three that sees Studio/manual/data-created fields, and the only one that says how populated a column is.
+- `dbfields.py` — the DATABASE's view of fields: `ir.model.fields` + per-column fill rates against a worktree env's DB (a restore of the prod dump).{% if not dev_in_worktrees %} With an `odoo.conf` at the project root, that conf's DB.{% endif %} The only one of the three that sees Studio/manual/data-created fields, and the only one that says how populated a column is.
 
 ## Task
 
@@ -90,9 +90,10 @@ python3 .claude/skills/find-code/dbfields.py product.template "mpn"    # matchin
 python3 .claude/skills/find-code/dbfields.py part_number               # no dot = which models carry it
 ```
 
-Answers from `ir.model.fields` + `count(column)` on the model's table, per the
-DB in the project root's `odoo.conf` (here: the local restore of the prod
-dump). Owner = the module(s) claiming the field in `ir_model_data`; `NO MODULE`
+Answers from `ir.model.fields` + `count(column)` on the model's table, in the
+DB of an `odoo.conf`: `--conf PATH`, else the worktree env the cwd is in, else
+{% if not dev_in_worktrees %}the project root's `odoo.conf`, else {% endif %}the most recently started worktree env
+(each a restore of the prod dump; the DB used is printed on stderr). Owner = the module(s) claiming the field in `ir_model_data`; `NO MODULE`
 means Studio, manual, or data-created — invisible to every source-tree tool.
 Reach here whenever the question is about a field's EXISTENCE, OWNER or DATA,
 not its code: `lsp.py sym` indexes functions and classes only, so a field

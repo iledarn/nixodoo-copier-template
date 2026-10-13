@@ -21,7 +21,10 @@ const BAND = {
 
 type Use = { tool_use_id: string; tool: string; input: Record<string, unknown> }
 
-// two worktree envs on the machine (kio-1 up, kio-2 down); odoo, pg, nginx up
+// what the band asked the system to open
+const opened: string[][] = []
+
+// two worktree envs on the machine (kio-1 up, kio-2 down); pg up
 function engine(on: On, cwd: string, history: Use[] = []): void {
   mock.clock(on)
   on('session.cwd', () => ({ value: cwd }))
@@ -37,10 +40,11 @@ function engine(on: On, cwd: string, history: Use[] = []): void {
   }))
   on('fs.read', (_$, e) => ({ value: e.path.includes('kio-1') ? '2701\n' : '2702\n' }))
   on('process.run', (_$, e) => {
+    if (e.argv[0] === 'xdg-open') opened.push([...e.argv])
     const dir = String(e.argv[2] ?? '')
     const stdout =
       e.argv[0] !== 'git'
-        ? 'active\nactive\nactive\nactive\ninactive\n'
+        ? 'active\nactive\ninactive\n'
         : dir.endsWith(ADDONS)
           ? '# branch.oid aaaa\n# branch.head 16.0\n# branch.upstream origin/16.0\n# branch.ab +0 -3\n'
           : dir === PROJECT
@@ -105,9 +109,10 @@ test('a session that works in neither: services, and the other envs as a count',
     const ui = await $.ui.mount({ ...BAND, surface })
     expect(await ui.find({ text: 'addons' })).toBeUndefined()
     expect(await ui.find({ text: /^env$/ })).toBeUndefined()
-    expect(await ui.find({ text: `odoo :${PORTS.odoo} ●` })).toBeDefined()
-    expect(await ui.find({ text: `pg :${PORTS.pg} ●` })).toBeDefined()
-    expect(await ui.find({ text: `nginx :${PORTS.nginx} ●` })).toBeDefined()
+    // the postgres cluster is the only service, drawn first; no main odoo, no nginx
+    const texts = (await ui.findAll({ type: 'Text' })).map(text => text.text)
+    expect(texts[0]).toBe(`pg :${PORTS.pg} ●`)
+    expect(texts.some(text => /^(odoo|nginx) :/.test(text))).toBe(false)
     expect(await ui.find({ text: '2 other wt envs' })).toBeDefined()
     // no tips: nothing reveals on hover, nothing underlines
     expect(JSON.stringify(await ui.drawn())).not.toMatch(/"hover"|"display":"none"/)
@@ -131,9 +136,20 @@ test('an edit in a worktree and git in addons, earlier in the transcript, show b
   const wt = (await ui.findAll({ type: 'Text' })).map(text => text.text)
   const label = wt.indexOf('wt')
   expect(wt.slice(label, label + 3)).toEqual(['wt', ':2701 ● up', 'kio-1-feature'])
-  // a bar between each two groups: env, addons, the worktree, the services, the other envs
+  // the session's address, its database the subdomain: a button that opens the browser on a remote surface
+  expect((await ui.find({ key: 'wt-open-kio-1' }))?.props.label).toBe('wt_kio_1.localhost:2701')
+  await ui.press({ key: 'wt-open-kio-1' })
+  expect(opened).toEqual([['xdg-open', 'http://wt_kio_1.localhost:2701/web']])
+  // a bar between each two groups: pg, env, addons, the worktree, the other envs
   expect(await ui.findAll({ type: 'Text', text: '│' })).toHaveLength(4)
   expect(await ui.find({ text: '1 other wt env' })).toBeDefined()
   expect(JSON.stringify(await ui.drawn())).not.toMatch(/"hover"|"display":"none"/)
   await ui.unmount()
+  // and a link on the terminal
+  const term = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect((await term.find({ type: 'Link' }))?.props).toMatchObject({
+    href: 'http://wt_kio_1.localhost:2701/web',
+    label: 'wt_kio_1.localhost:2701',
+  })
+  await term.unmount()
 })

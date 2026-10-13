@@ -17,12 +17,14 @@ nix run .#create-env          # .env: ports, database credentials
 nix run .#update-repos        # clone Odoo and the addon repos, build the symlink farm
 nix run .#bootstrap-deps      # import Odoo's requirements.txt into uv.lock
 nix profile add .#dev-server  # odoo, psql, ruff and friends into your profile
-nix run .#setup-dev           # postgres cluster, odoo.conf, nginx, systemd units
-systemctl --user enable --now postgres.service odoo.service nginx.service odoo-logrotate.timer
+nix run .#setup-dev           # postgres cluster (+ odoo.conf, nginx and systemd units without worktree envs)
+systemctl --user enable --now postgres.service
 ```
 
-Odoo is then on the port the template derived from your version, with its own PostgreSQL, its own
-addons farm and a log rotating daily. The generated `README.md` walks through the test and production
+With Claude Code and a custom addons repo, every task then runs in its own worktree env
+(`wt-start.sh <slug>`): its own Odoo on its own port and its own restore of the prod dump; there
+is no main Odoo, nginx or database. Without them, `setup-dev` builds the classic single env
+(`odoo.service`, `nginx.service`, `odoo-logrotate.timer`) on the ports derived from your version. The generated `README.md` walks through the test and production
 flows the same way.
 
 You need [Nix](https://nixos.org/download) with flakes enabled, [uv](https://docs.astral.sh/uv/)
@@ -45,8 +47,8 @@ sudo systemctl restart nix-daemon
 - **Pinned sources**: `repos.yaml` for Odoo, `addons.yaml` for OCA and custom addon repos, pinned by
   branch or commit, with a symlink farm builder.
 - **Generated configuration**: `.env`, `odoo.conf` with a random master password, systemd user
-  units, a log-rotation timer, and an nginx reverse proxy for dev and test - production is left to
-  whatever already fronts it.
+  units, a log-rotation timer, and an nginx reverse proxy for test (and dev without worktree envs) -
+  production is left to whatever already fronts it.
 - **Python dependencies straight from Odoo's own `requirements.txt`**, locked with uv and built with
   uv2nix, so the flake and your shell agree.
 - **Claude Code integration**, optional: `CLAUDE.md`, guard hooks, Odoo skills including semantic

@@ -8,14 +8,14 @@
 #   runtime   .worktrees/_env/<slug>/       (odoo.conf, data_dir, port file)
 #   DB        wt_<slug>                      (independent restore of the prod dump)
 #   service   odoo{{ service_suffix }}-wt@<slug>.service         (own Odoo on its own port)
-# Nothing is shared between sessions except the read-only seed dump and the
-# pinned OCA/CE module sources. The user's main env (develop / odoo{{ service_suffix }}.service /
-# {{ odoo_http_port }}) is never touched.
+# Nothing is shared between sessions except the read-only seed dump, the
+# pinned OCA/CE module sources and the postgres cluster. There is no main env:
+# no main Odoo, no reverse proxy, no main database; every task runs here.
+# A session is served at http://wt_<slug>.localhost:<port> (dbfilter ^%d$).
 
 PROJ="${{ "{" }}{{ project_dir_var }}:-$HOME/{{ project_name }}}"
 SRC_REPO="$PROJ/src/{{ custom_repo_name }}"               # nested addons repo (the user's main checkout)
 MAIN_FARM="$PROJ/.local/share/Odoo/addons/{{ odoo_version }}"   # main symlink farm — source of truth for OCA/CE targets
-SEED_FILESTORE="$PROJ/.local/share/Odoo/filestore/{{ db_name }}"  # best-effort attachment seed
 
 WT_ROOT="$PROJ/.worktrees"                         # per-task git worktrees (gitignored)
 WT_ENVROOT="$WT_ROOT/_env"                         # per-session runtime (conf/data/port)

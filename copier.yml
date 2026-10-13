@@ -173,7 +173,7 @@ status_mcp:
 
 tickets_mcp:
   type: str
-  help: MCP used for ticket tracking (adds the odoo-tickets skill; ticket keys/links in statuses and the pipeline)
+  help: Ticket tracking in production Odoo (adds the odoo-tickets skill; ticket keys/links in statuses and the pipeline). Odoo is reached through the claude.ai Odoo connector each developer connects in claude.ai settings with their own account - nothing is installed in the project
   default: none
   choices:
     - none
@@ -182,7 +182,7 @@ tickets_mcp:
 
 odoo_prod_url:
   type: str
-  help: Production Odoo base URL (ticket links + ODOO_*_PROD profile in .env)
+  help: Production Odoo base URL (ticket links; without kb, the standup's ODOO_*_PROD lines in .env)
   default: ""
   when: "{{ tickets_mcp == 'odoo' }}"
 
@@ -336,6 +336,14 @@ odoo_cmd:
   type: str
   when: false
   default: "{% if service_suffix %}~/{{ nix_profile_rel }}/bin/odoo{% else %}odoo{% endif %}"
+
+# Development runs in worktree envs only: no main Odoo, no reverse proxy, no main
+# database. True wherever the worktree-env skill is generated (Claude Code and a
+# custom addons repo); a project without it keeps the main dev env it has to have.
+dev_in_worktrees:
+  type: bool
+  when: false
+  default: "{{ use_claude_code and custom_repo_name != '' }}"
 
 
 odoo_major:

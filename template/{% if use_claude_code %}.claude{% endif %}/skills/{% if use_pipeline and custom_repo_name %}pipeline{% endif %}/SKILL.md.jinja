@@ -71,7 +71,7 @@ These feed Phase 7 (Memory Closure). If a subagent forgets the closing block, as
 {% if tickets_mcp == 'odoo' %}
 ## Change Tracking (via Odoo Internal Notes + Checklist)
 
-Track all changes/progress in the Odoo production task — **over the odoo MCP, never claude-in-chrome**. All calls, field conventions, context flags and gotchas live in the **`odoo-tickets` skill** — read it once at pipeline start, follow it for every prod task op below. Connect with `env_profile: "prod"` for prod ops, and **immediately after every prod batch reconnect to local** so a connection left parked on prod can't silently run later checks against production. Phase-3 verification targets THIS session (not the main `develop`): point the MCP at it with explicit params — `connect host="localhost" port=<PORT> database=<DB> username="admin" password="admin"` — and confirm `get_connection_status` shows `<DB>` before trusting it.
+Track all changes/progress in the Odoo production task — **over the Odoo connector (claude.ai, the user's own account), never claude-in-chrome**. All calls, field conventions, context flags and gotchas live in the **`odoo-tickets` skill** — read it once at pipeline start, follow it for every prod task op below. The connector only ever reaches production; there is no local Odoo MCP. Phase-3 verification targets THIS session through `{{ odoo_cmd }} shell -c <CONF>` (and `psql -d <DB>`), so a check can never land on production by a parked connection.
 
 ### Internal Notes
 On user feedback, a design decision, or an applied fix, post an **internal note** (`message_post` with `mail.mt_note`, explicit author/email_from per `odoo-tickets`) with:
@@ -118,8 +118,8 @@ report and the Phase-7 memory closure (journal + state.md).
 ## Isolated per-session environment
 
 Every run executes in its own isolated env — own worktree + port + DB + Odoo — so
-parallel pipeline sessions never collide and the user's main env
-(`src/{{ custom_repo_name }}` / `develop` / `odoo{{ service_suffix }}.service` / 1669) is untouched. **The model,
+parallel pipeline sessions never collide, and the user's checkout `src/{{ custom_repo_name }}`
+is untouched; there is no main Odoo or main database to protect. **The model,
 scripts and gotchas live in the `worktree-env` skill — read it.** What the pipeline
 needs from it:
 
@@ -131,11 +131,9 @@ needs from it:
 - **Phase 7** does NOT tear the env down on its own — the worktree is kept so
   the task can continue. `wt-stop.sh <slug>` runs ONLY when the user says the
   session is finished, and only after you ask (see Phase 7 Step 0).
-- The odoo MCP can verify a session too — `connect` to it explicitly (`host="localhost"`,
-  `port=<PORT>`, `database=<DB>`, `admin`/`admin`); the `default`/`prod` profiles are
-  `develop`/prod, so pass explicit params, not a profile. The connection is global per
-  MCP server — alternate deliberately with prod ticket ops (`odoo-tickets`) and check
-  `get_connection_status`.
+- A session is verified from its own conf: `{{ odoo_cmd }} shell -c <CONF> --no-http` with a script
+  on stdin (a given user: `with_user()`), or `psql -d <DB>` for plain reads. The Odoo
+  connector is production only.
 - Prereq: a seed dump in `backup/` ({% if backup_s3_bucket %}`nix run .#download-backup` to fetch/refresh{% else %}drop a `pg_dump -Fc` file in manually{% endif %}) —
   if `wt-start` reports none, ask the user to provide it first.
 
@@ -161,7 +159,7 @@ text:
   voids it.
 - A block of tasks is one run (one status, one grill alignment): start it with all the keys, or
   call `mcp__pipeline-gates__tasks` with `add` (`"KIO-1234 short title <its _url>"`, the `_url` the
-  odoo MCP returns for the task: the pane gives it an open-in-Odoo link) before the first phase
+  Odoo connector returns for the task: the pane gives it an open-in-Odoo link) before the first phase
   that names another task of the block. Mark each task `active` when you start on it and `done`
   when it is finished (in the PR, or closed without code; several may share one PR): the user
   follows the block's progress in the pipeline pane and band.
@@ -271,7 +269,7 @@ Hold in scratch for the rest of the pipeline; Phases 2–4 append from subagent 
 Before spawning any subagent:
 
 {% if tickets_mcp == 'odoo' %}
-0. **Resolve & read the task** (URL or {{ ticket_prefix }} key) — over the odoo MCP per
+0. **Resolve & read the task** (URL or {{ ticket_prefix }} key) — over the Odoo connector per
    `odoo-tickets` (never Chrome):
    - Resolve: id from the URL (`#id=<n>`), or
      `search_read` `[["key", "=", "{{ ticket_prefix }}-xxxx"]]`
@@ -397,7 +395,7 @@ Before spawning any subagent:
 
    **Important**: Adapt the template — skip/add sections as needed. Goal is actionable technical clarity, not filling every section.
 
-4. **Populate Test Cases** — when the Test Cases tab is empty or has fewer than 3 cases, create comprehensive `project.task.testcase` records over MCP:
+4. **Populate Test Cases** — when the Test Cases tab is empty or has fewer than 3 cases, create comprehensive `project.task.testcase` records over the Odoo connector:
 
    a. Derive test cases from the Description + Technical Solution
    b. Cover ALL of these categories:
@@ -458,8 +456,8 @@ Before spawning any subagent:
    builds the session farm, restores `wt_<slug>` from the prod seed dump, and starts
    `odoo{{ service_suffix }}-wt@<slug>.service`. **Capture the printed `WORKTREE:`/`CONF:`/`URL:`/`DB:`/
    `PORT:` as `<WT>`/`<CONF>`/`<URL>`/`<DB>`/`<PORT>`** — every later phase uses them.
-   All code/git for this run happens in `<WT>`; the user's `src/{{ custom_repo_name }}` and
-   `develop` are never touched. (Prereq: a seed dump in `backup/` — if `wt-start`
+   All code/git for this run happens in `<WT>`; the user's `src/{{ custom_repo_name }}` is
+   never touched. (Prereq: a seed dump in `backup/` — if `wt-start`
    reports none, ask the user to {% if backup_s3_bucket %}run `nix run .#download-backup` once{% else %}drop a prod dump into `backup/`{% endif %} first.)
 
 Report: "Starting pipeline for: <TASK-KEY> — <task summary>". Add the grill-gate outcome: "Grill gate: Alignment Summary confirmed (N questions, M assumptions)" or "Grill gate: skipped (mechanical task)".{% if tickets_mcp == 'odoo' %} If clarifying questions were asked, add "N clarifying Q&A captured to the Technical Solution tab." If Technical Solution was enriched, add "Technical Solution auto-generated and written to the task. Please review." If Test Cases were generated, add "N test cases written to Test Cases tab."{% endif %}
@@ -532,14 +530,11 @@ first-line verdicts:
 Minor findings and Nits are not verified. A `verify` agent is read-only and
 returns no closing block.
 
-**Check 2 — validation.** Run directly (NOT via subagent) — you need Chrome browser tools and this session's running Odoo. Everything here targets THIS session (`<CONF>` / `<DB>` / `<URL>`), never the main env or another session.
+**Check 2 — validation.** Run directly (NOT via subagent) — you need Chrome browser tools and this session's running Odoo. Everything here targets THIS session (`<CONF>` / `<DB>` / `<URL>`), never another session.
 
-0. Point the odoo MCP at THIS session for backend checks —
-   `connect host="localhost" port=<PORT> database="<DB>" username="admin" password="admin"`
-   (the `default`/`prod` profiles are `develop`/prod, not a session). Confirm
-   `get_connection_status` shows `<DB>` before trusting it. The connection is global,
-   so never run session checks while parked on prod, or prod ticket ops while on the
-   session.
+0. Backend checks run against THIS session from its conf — `{{ odoo_cmd }} shell -c <CONF> --no-http`
+   with the check on stdin, or `psql -d <DB>` for plain reads — never over the Odoo
+   connector, which is production.
 1. Refresh the env (picks up any module added during dev) and stop its Odoo:
    ```bash
    bash "${{ project_dir_var }}/.claude/skills/worktree-env/scripts/wt-start.sh" <slug>
@@ -571,14 +566,12 @@ returns no closing block.
    **Test Cases** tab populated in Phase 1. Do NOT skip; if one can't be
    verified automatically (e.g. needs specific data setup), document what was
    checked and any limitations.
-   - **Read over MCP** (prod batch — reconnect to the session before verifying
-     anything locally): `search_read` `project.task.testcase` by `task_id`,
+   - **Read over the Odoo connector** (production): `search_read` `project.task.testcase` by `task_id`,
      fields `["id", "name", "state", "passed", "steps_to_execute", "expected_results"]`
-   - **Execute each**: backend via the odoo MCP connected to the session
-     (`connect host="localhost" port=<PORT> database="<DB>"`), the Odoo shell
-     (`{{ odoo_cmd }} shell -c <CONF>`), or Python tests; UI via Chrome on `<URL>`; access
+   - **Execute each**: backend via the Odoo shell on the session
+     (`{{ odoo_cmd }} shell -c <CONF>`) or Python tests; UI via Chrome on `<URL>`; access
      control via `with_user()` in shell or by switching users in browser.
-   - **Mark over MCP** (per `odoo-tickets`): passed → `write {"passed": true,
+   - **Mark over the Odoo connector** (per `odoo-tickets`): passed → `write {"passed": true,
      "state": "done"}`; failed → keep `todo`, add details to `comments`.
    - **Post summary internal note**: "Test Case Verification: X/Y passed.
      [Details of any failures and fixes]"
@@ -696,7 +689,7 @@ gif_creator action: export
 Set `showActionLabels: false` because we use custom caption overlays instead.
 
 {% if tickets_mcp == 'odoo' %}
-**Step 4: Attach the GIF to the task over MCP**
+**Step 4: Attach the GIF to the task over the Odoo connector**
 
 The GIF downloads to the browser's downloads folder. Attach programmatically (per `odoo-tickets` → Attachments): base64 the file, `create` an `ir.attachment` on the task, then `message_post` an internal note describing the demo with `attachment_ids` pointing at it. If the file can't be located locally, ask the user to drag-drop it.
 
@@ -936,5 +929,5 @@ Final summary:
 ```
 {% if tickets_mcp == 'odoo' %}
 
-At the end, mark all completed checklist items over MCP (`project.task.subtask` → `write {"state": "done"}`) and restore the connection to local (`connect env_profile: "default"`).
+At the end, mark all completed checklist items over the Odoo connector (`project.task.subtask` → `write {"state": "done"}`).
 {% endif %}

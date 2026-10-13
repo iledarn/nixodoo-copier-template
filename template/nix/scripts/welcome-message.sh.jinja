@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # Print the dev environment banner with versions and useful commands.
-# Requires: POSTGRESQL_VERSION, PYTHON_VERSION, WKHTMLTOPDF_VERSION,
-# NGINX_VERSION (injected by flake.nix).
+# Requires: POSTGRESQL_VERSION, PYTHON_VERSION, WKHTMLTOPDF_VERSION{% if not dev_in_worktrees %},
+# NGINX_VERSION{% endif %} (injected by flake.nix).
 if [ -z "${{ project_dir_var }}" ]; then {{ project_dir_var }}="$(pwd)"; fi
 if [ -f "${{ project_dir_var }}/.env" ]; then
     set -a
@@ -15,15 +15,31 @@ printf "║  %-61s║\n" "{{ project_name }} - Odoo {{ odoo_version }} Dev Envir
 echo "╚═══════════════════════════════════════════════════════════════╝"
 echo ""
 echo "Project: ${{ project_dir_var }}"
+{% if dev_in_worktrees %}
+echo "Odoo: one worktree env per task (worktree-env skill), at http://wt_<slug>.localhost:<port>/web"
+{% else %}
 echo "Odoo URL: http://localhost:$ODOO_NGINX_PORT"
+{% endif %}
 echo ""
 echo "Versions:"
 echo "  PostgreSQL:    $POSTGRESQL_VERSION"
 echo "  Python:        $PYTHON_VERSION"
 echo "  wkhtmltopdf:   $WKHTMLTOPDF_VERSION"
+{% if not dev_in_worktrees %}
 echo "  Nginx:         $NGINX_VERSION"
+{% endif %}
 echo ""
 echo "Services:"
+{% if dev_in_worktrees %}
+echo "  systemctl --user {enable|start|restart|stop|status} postgres{{ service_suffix }}.service"
+echo "  systemctl --user {start|restart|stop|status} odoo{{ service_suffix }}-wt@<slug>.service"
+echo ""
+echo "Useful Commands:"
+echo "  update module:    {{ odoo_cmd }} -c \${{ project_dir_var }}/.worktrees/_env/<slug>/odoo.conf -u module_name --workers 0 --stop-after-init --logfile="
+echo "  run shell:        {{ odoo_cmd }} shell -c \${{ project_dir_var }}/.worktrees/_env/<slug>/odoo.conf --workers 0 --stop-after-init"
+echo "  odoo logs:        journalctl --user -u odoo{{ service_suffix }}-wt@<slug>.service -f | ccze -A"
+echo "  postgres logs:    tail -f \".postgres/log/postgresql.log\" | ccze -A"
+{% else %}
 echo "  systemctl --user enable odoo{{ service_suffix }}.service postgres{{ service_suffix }}.service nginx{{ service_suffix }}.service odoo{{ service_suffix }}-logrotate.timer"
 echo "  systemctl --user start odoo{{ service_suffix }}.service postgres{{ service_suffix }}.service nginx{{ service_suffix }}.service odoo{{ service_suffix }}-logrotate.timer"
 echo "  systemctl --user restart odoo{{ service_suffix }}.service postgres{{ service_suffix }}.service nginx{{ service_suffix }}.service"
@@ -35,6 +51,7 @@ echo "  update module:    {{ odoo_cmd }} -c \${{ project_dir_var }}/odoo.conf -u
 echo "  run shell:        {{ odoo_cmd }} shell -c \${{ project_dir_var }}/odoo.conf --workers 0 --stop-after-init"
 echo "  odoo logs:        journalctl --user -u odoo{{ service_suffix }}.service -f | ccze -A"
 echo "  postgres logs:    tail -f \".postgres/log/postgresql.log\" | ccze -A"
+{% endif %}
 {% if prod_ssh_host %}
 echo ""
 echo "Remote Servers:"

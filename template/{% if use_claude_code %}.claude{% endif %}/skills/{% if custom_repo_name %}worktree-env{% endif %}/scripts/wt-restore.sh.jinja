@@ -32,7 +32,7 @@ DUMP="$(ls -1t "$BACKUP_DIR"/*.dump 2>/dev/null | head -1 || true)"
 [ -f "$CONF" ] || { echo "ERROR: $CONF missing — wt-start writes it before the restore" >&2; exit 1; }
 
 RESTORE_LOG="$WT_ENVROOT/$SLUG/pg_restore.log"
-# Parallel restore, deliberately capped lower than the main env: worktree
+# Parallel restore, deliberately capped lower than a lone restore: worktree
 # sessions are meant to run side by side, and every job holds a connection on
 # the SHARED cluster alongside each session's Odoo workers. Half the cores,
 # max 4. PG_RESTORE_JOBS overrides (1 = the old serial behaviour).

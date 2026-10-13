@@ -213,6 +213,9 @@
                     # test and development
                     # The reverse proxy is set up here and not in setup-prod:
                     # production is fronted by the deployment's own proxy
+{% if dev_in_worktrees %}
+                    # (and development runs no main Odoo to proxy: worktree envs only)
+{% endif %}
                     create-nginx-config = mkScript "create-nginx-config" { };
                     create-nginx-service = mkScript "create-nginx-service" {
                         vars.NGINX_BIN = "${pkgs.nginx}/bin/nginx";
@@ -248,9 +251,18 @@
                     };
                     setup-dev = mkScript "setup-dev" {
                         deps = [
+{% if dev_in_worktrees %}
+                            create-env
+                            update-repos
+                            setup-postgres
+{% if backup_s3_bucket %}
+                            create-aws-config
+{% endif %}
+{% else %}
                             setup-prod
                             setup-postgres
                             setup-test
+{% endif %}
 {% if prod_ssh_host %}
                             setup-ssh-access
 {% endif %}
@@ -273,8 +285,14 @@
                     pkgs.yq-go
                 ];
 
+{% if dev_in_worktrees %}
+                # Reverse proxy - test only: production is fronted by the
+                # deployment's own proxy, development serves each worktree env
+                # straight from its own Odoo port
+{% else %}
                 # Reverse proxy - test and development only, production is
                 # fronted by the deployment's own proxy
+{% endif %}
                 proxyTools = [ pkgs.nginx ];
 
                 # Postgres client - test and development only, where dumps are
@@ -340,7 +358,9 @@
                         POSTGRESQL_VERSION = postgresql.version;
                         PYTHON_VERSION = python.version;
                         WKHTMLTOPDF_VERSION = pkgs.wkhtmltopdf.version;
+{% if not dev_in_worktrees %}
                         NGINX_VERSION = pkgs.nginx.version;
+{% endif %}
                     };
                 };
 
@@ -416,7 +436,7 @@
                     # nix profile add {{ nix_profile_flag }}.#dev-server / nix profile remove {{ nix_profile_flag }}dev-server
                     dev-server = mkServer {
                         suffix = "dev-server";
-                        tools = productionTools ++ proxyTools ++ dbClientTools ++ devTools;
+                        tools = productionTools{% if not dev_in_worktrees %} ++ proxyTools{% endif %} ++ dbClientTools ++ devTools;
                         odoo = odooDevWrapper;
                         extraInstall = devServerExtras;
                     };

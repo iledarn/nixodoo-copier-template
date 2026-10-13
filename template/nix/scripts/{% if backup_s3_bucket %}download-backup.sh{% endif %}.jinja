@@ -1,6 +1,8 @@
 # shellcheck shell=bash
-# Download the latest prod backup from S3 and restore it into a local database,
-# then neutralize it (native `odoo neutralize` — runs every installed module's
+# Download the latest prod backup from S3 into backup/. Development stops there:
+# every worktree env restores its own copy of it (worktree-env's wt-restore), and
+# there is no main database. Where an odoo.conf sits in the project (a test box),
+# the dump is then restored into a local database and neutralized (native `odoo neutralize` — runs every installed module's
 # data/neutralize.sql) and apply dev fixups (admin/admin, requeue stuck jobs,
 # bump the document sequences past the dump's imported names). The restore and
 # both steps run under a staging name; the database takes its real name only
@@ -20,7 +22,8 @@ usage() {
     echo "Usage: nix run .#download-backup -- [database_name] [--skip-download]"
     echo ""
     echo "Arguments:"
-    echo "  database_name    Name of the database to create/restore (default: db_name from odoo.conf)"
+    echo "  database_name    Name of the database to create/restore (default: db_name from odoo.conf;"
+    echo "                   without an odoo.conf - development - the dump is only downloaded)"
     echo "  --skip-download  Skip downloading backup from S3 (use existing backup folder)"
     exit 1
 }
@@ -50,14 +53,20 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Read database configuration from odoo.conf
+# Read database configuration from odoo.conf; none means development, where the
+# dump is only fetched for the worktree envs to restore
 ODOO_CONF="$PWD/odoo.conf"
+RESTORE=true
 if [ ! -f "$ODOO_CONF" ]; then
-    echo "Error: odoo.conf not found at $ODOO_CONF"
-    exit 1
+    if [ -n "$DATABASE_NAME" ]; then
+        echo "Error: odoo.conf not found at $ODOO_CONF, and restoring into '$DATABASE_NAME' needs one"
+        exit 1
+    fi
+    RESTORE=false
 fi
 
 get_conf_value() {
+    [ -f "$ODOO_CONF" ] || return 0
     grep "^$1 = " "$ODOO_CONF" | sed "s/^$1 = //"
 }
 
@@ -74,16 +83,17 @@ if [ -n "$DATABASE_NAME" ]; then
     PGDATABASE="$DATABASE_NAME"
 fi
 
-if [ -z "$PGDATABASE" ]; then
-    echo "Error: database_name is required (either as argument or db_name in odoo.conf)"
-    usage
+if [ "$RESTORE" = true ]; then
+    if [ -z "$PGDATABASE" ]; then
+        echo "Error: database_name is required (either as argument or db_name in odoo.conf)"
+        usage
+    fi
+    echo "Using database configuration:"
+    echo "  Host: $PGHOST"
+    echo "  Port: $PGPORT"
+    echo "  User: $PGUSER"
+    echo "  Database: $PGDATABASE"
 fi
-
-echo "Using database configuration:"
-echo "  Host: $PGHOST"
-echo "  Port: $PGPORT"
-echo "  User: $PGUSER"
-echo "  Database: $PGDATABASE"
 
 if [ "$SKIP_DOWNLOAD" = false ]; then
     echo "Downloading latest backup from s3://$S3_BUCKET ..."
@@ -105,6 +115,11 @@ if [ "$SKIP_DOWNLOAD" = false ]; then
     echo "Backup downloaded successfully to $PWD/backup"
 else
     echo "Skipping download, using existing backup folder..."
+fi
+
+if [ "$RESTORE" = false ]; then
+    echo "No odoo.conf: download only. Each worktree env restores its own copy (worktree-env skill)."
+    exit 0
 fi
 
 STARTED_CLUSTER=false
