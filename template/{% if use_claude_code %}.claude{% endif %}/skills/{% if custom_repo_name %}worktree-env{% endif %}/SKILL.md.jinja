@@ -1,13 +1,13 @@
 ---
 name: worktree-env
-description: "Spin up / list / tear down isolated per-session Odoo {{ odoo_version }} dev environments, each backed by a git worktree of the addons repo with its own port, database (own restore of the prod dump), data_dir and systemd service — so many tasks run in parallel without touching each other. There is no main env: every task runs in one. Used by the pipeline skill and standalone. Use when asked to start/stop an isolated env, work on a task in parallel, or run something against a throwaway Odoo."
+description: "Spin up / list / tear down isolated per-session Odoo {{ odoo_version }} dev environments, each backed by a git worktree of the addons repo with its own port, database (own restore of the prod dump), data_dir and systemd service — so many tasks run in parallel without touching each other. There is no main env: every pipeline run (one task, or a block of tasks) runs in one. Used by the pipeline skill and standalone. Use when asked to start/stop an isolated env, work on a task in parallel, or run something against a throwaway Odoo."
 argument-hint: "[start|stop|list] [slug]"
 ---
 
 # Worktree Dev Environments
 
-Per-session isolated Odoo envs. Each run is keyed by a task `<slug>` and gets its
-own worktree + port + DB + data_dir + systemd unit. Many can run in parallel. This
+Per-session isolated Odoo envs. Each pipeline run (one task, or a block of tasks)
+is keyed by a `<slug>` and gets its own worktree + port + DB + data_dir + systemd unit. Many can run in parallel. This
 is the only place Odoo runs in development: there is no main Odoo, no reverse
 proxy and no main database, only the shared postgres cluster
 (`postgres{{ service_suffix }}.service`, :{{ postgres_port }}) that holds every session's DB.

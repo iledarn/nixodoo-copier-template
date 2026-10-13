@@ -8,7 +8,7 @@
 
 - **Python**: {{ python_version }} (managed by Nix, no virtualenv/pip — use `uv` for dependency management)
 {% if dev_in_worktrees %}
-- **Odoo**: one worktree env per task (`worktree-env` skill), no main Odoo, no nginx, no main database. A session runs `odoo{{ service_suffix }}-wt@<slug>.service` at `http://wt_<slug>.localhost:<port>/web` (port in {{ (odoo_major | int + 11) * 100 }}–{{ (odoo_major | int + 11) * 100 + 99 }}), conf `.worktrees/_env/<slug>/odoo.conf`, log `.worktrees/_env/<slug>/odoo.log`
+- **Odoo**: one worktree env per pipeline run (`worktree-env` skill; a block of tasks in one run shares it), no main Odoo, no nginx, no main database. A session runs `odoo{{ service_suffix }}-wt@<slug>.service` at `http://wt_<slug>.localhost:<port>/web` (port in {{ (odoo_major | int + 11) * 100 }}–{{ (odoo_major | int + 11) * 100 + 99 }}), conf `.worktrees/_env/<slug>/odoo.conf`, log `.worktrees/_env/<slug>/odoo.log`
 - **Database**: PostgreSQL {{ postgres_version }} on `localhost:{{ postgres_port }}` (`postgres{{ service_suffix }}.service`), user/pass `{{ db_user }}/{{ db_password }}`; each session's DB is `wt_<slug>`, a restore of the prod dump in `backup/`
 - **Odoo credentials** (sessions): `admin` / `admin`{% if tickets_mcp == 'odoo' %}. Production is reached through the claude.ai Odoo connector, signed in as you{% endif %}
 
@@ -23,7 +23,7 @@
 
 ```bash
 {% if dev_in_worktrees %}
-# A worktree env per task: start (idempotent), list, stop
+# A worktree env per pipeline run: start (idempotent), list, stop
 bash .claude/skills/worktree-env/scripts/wt-start.sh <slug>
 bash .claude/skills/worktree-env/scripts/wt-list.sh
 bash .claude/skills/worktree-env/scripts/wt-stop.sh <slug>

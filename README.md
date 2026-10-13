@@ -21,7 +21,7 @@ nix run .#setup-dev           # postgres cluster (+ odoo.conf, nginx and systemd
 systemctl --user enable --now postgres.service
 ```
 
-With Claude Code and a custom addons repo, every task then runs in its own worktree env
+With Claude Code and a custom addons repo, every pipeline run then gets its own worktree env
 (`wt-start.sh <slug>`): its own Odoo on its own port and its own restore of the prod dump; there
 is no main Odoo, nginx or database. Without them, `setup-dev` builds the classic single env
 (`odoo.service`, `nginx.service`, `odoo-logrotate.timer`) on the ports derived from your version. The generated `README.md` walks through the test and production
