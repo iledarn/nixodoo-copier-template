@@ -32,7 +32,7 @@ from glob import glob
 
 SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(SKILL_DIR, "..", "..", ".."))
-BIN_DIR = os.path.expanduser("~/.local/share/odoo-ls")  # shared with the editor (Zed points here too)
+BIN_DIR = os.path.expanduser("~/.local/share/odoo-ls")
 RUNTIME_DIR = os.path.join(os.path.expanduser("~"), ".cache", "odoo-ls-cli")
 KEY = hashlib.sha1(ROOT.encode()).hexdigest()[:10]
 SOCK = os.path.join(RUNTIME_DIR, KEY + ".sock")
@@ -50,7 +50,6 @@ def find_bin():
     if os.path.exists(current):
         return current
     cands = glob(os.path.join(BIN_DIR, "*", "odoo_ls_server"))
-    cands += glob(os.path.expanduser("~/.local/share/zed/extensions/work/odoo/*/odoo_ls_server"))
     if cands:
         def ver(p):
             m = re.search(r"/([\d.]+)/odoo_ls_server$", p)

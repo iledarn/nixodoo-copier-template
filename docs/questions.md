@@ -13,7 +13,7 @@ Defaults in the table; anything you leave empty turns its feature off. See [the 
 | `project_dir_var` (project-root env var; make unique to run two projects on one Odoo version) | `ODOO<major>_PROJECT_DIR` |
 | `service_suffix` (systemd unit + nix profile suffix; set e.g. `-19` so a second generated project can coexist on one machine — `odoo-19.service`, own profile `~/.local/state/nix/profiles/<project>`) | empty = classic names + `~/.nix-profile` |
 | `use_queue_job` | `false` |
-| `editor` | `none` (or `vscode` → settings generator; `zed` → debug config; `odools.toml` ships with `use_claude_code` or `zed`) |
+| `editor` | `none` (or `vscode` → settings generator; `odools.toml` ships with `use_claude_code`) |
 | `default_repo_pattern` | `https://github.com/OCA/{}.git` |
 | `custom_repo_pattern` / `custom_repo_name` | empty → no custom addons repo |
 | `use_claude_code` | `true` — CLAUDE.md, hooks, skills, agents, MCP config |

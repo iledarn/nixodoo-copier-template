@@ -19,36 +19,6 @@ Generated from [nixodoo-copier-template](https://github.com/okolovmark/nixodoo-c
 
 [Debugger](https://marketplace.visualstudio.com/items?itemName=ms-python.debugpy)
 
-{% elif editor == 'zed' %}
-### Zed
-
-Install [Zed](https://zed.dev) with the
-[Odoo (OdooLS)](https://github.com/odoo/odoo-ls) and Python extensions.
-The project ships `odools.toml` (language-server config: odoo path, addons
-paths, diagnostics filter) and `.zed/debug.json` (debugpy launch config for
-the Odoo server).
-
-**Debugger setup.** Select `./.venv` as the worktree's Python toolchain (the
-environment picker in the status bar); `nix run .#setup-dev` creates it. Zed
-builds its own debugpy adapter by running `<toolchain python> -m venv` and
-installing debugpy with pip, which the project env cannot serve - it is itself
-a venv, and a venv over a venv sends `ensurepip` into the read-only nix store
-("Failed to create base virtual environment"). `.venv` sits over the base
-interpreter and has no such problem. It stays empty on purpose: the debugged
-Odoo process is pinned by `.zed/debug.json` to `.venv/bin/dev-python`, a
-symlink to the nix profile's python (the full project env), and needs no
-debugpy of its own - the adapter injects one into the process it launches.
-
-Two things that cost hours if unknown:
-
-- **Restart Zed after changing the toolchain.** Zed caches the adapter-venv
-  result for the lifetime of the process, failure included, so a fixed setup
-  keeps reporting the old error until you quit and reopen.
-- **Do not set `dap.Debugpy.binary`.** Zed appends it as a script argument
-  (`python3 <binary> <args>`) and talks to debugpy over TCP, so an override
-  pointing at an interpreter dies instantly ("process exited before debugger
-  attached") and one pointing at a stdio adapter is never sent a single byte.
-
 {% endif %}
 {% if use_claude_code %}
 ### Claude Code CLI installation
@@ -205,9 +175,8 @@ sudo systemctl restart nix-daemon
 {% if editor == 'vscode' %}
 ├── .vscode/            # VSCode settings
 {% endif %}
-{% if editor == 'zed' %}
-├── .zed/               # Zed debug config
-├── odools.toml         # OdooLS language-server config
+{% if use_claude_code %}
+├── odools.toml         # OdooLS language-server config (find-code's LSP client)
 {% endif %}
 ├── odoo.conf           # Odoo configuration file (generated)
 ├── odoo.log            # Odoo logs (rotated daily)
