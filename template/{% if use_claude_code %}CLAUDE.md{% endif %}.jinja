@@ -7,14 +7,39 @@
 ## Environment
 
 - **Python**: {{ python_version }} (managed by Nix, no virtualenv/pip — use `uv` for dependency management)
+{% if dev_in_worktrees %}
+- **Odoo**: one worktree env per task (`worktree-env` skill), no main Odoo, no nginx, no main database. A session runs `odoo{{ service_suffix }}-wt@<slug>.service` at `http://wt_<slug>.localhost:<port>/web` (port in {{ (odoo_major | int + 11) * 100 }}–{{ (odoo_major | int + 11) * 100 + 99 }}), conf `.worktrees/_env/<slug>/odoo.conf`, log `.worktrees/_env/<slug>/odoo.log`
+- **Database**: PostgreSQL {{ postgres_version }} on `localhost:{{ postgres_port }}` (`postgres{{ service_suffix }}.service`), user/pass `{{ db_user }}/{{ db_password }}`; each session's DB is `wt_<slug>`, a restore of the prod dump in `backup/`
+- **Odoo credentials** (sessions): `admin` / `admin`{% if tickets_mcp == 'odoo' %}. Production is reached through the claude.ai Odoo connector, signed in as you{% endif %}
+
+{% else %}
 - **Database**: PostgreSQL {{ postgres_version }} — `{{ db_name }}` on `localhost:{{ postgres_port }}`, user/pass `{{ db_user }}/{{ db_password }}`
 - **Odoo HTTP**: `localhost:{{ odoo_http_port }}`, {% if odoo_major | int >= 17 %}gevent{% else %}longpolling{% endif %} `localhost:{{ odoo_gevent_port }}`, nginx proxy `localhost:{{ nginx_port }}`
 - **Odoo credentials**: `admin` / `admin`
 - **Config**: `odoo.conf` (generated) | **Logs**: `odoo.log` (rotated daily)
+{% endif %}
 
 ## Key Commands
 
 ```bash
+{% if dev_in_worktrees %}
+# A worktree env per task: start (idempotent), list, stop
+bash .claude/skills/worktree-env/scripts/wt-start.sh <slug>
+bash .claude/skills/worktree-env/scripts/wt-list.sh
+bash .claude/skills/worktree-env/scripts/wt-stop.sh <slug>
+
+# Services: the postgres cluster, and one Odoo per session
+systemctl --user {start|stop|restart|status} postgres{{ service_suffix }}.service odoo{{ service_suffix }}-wt@<slug>.service
+
+# Update/install module in a session (stop its odoo first)
+{{ odoo_cmd }} -c ${{ project_dir_var }}/.worktrees/_env/<slug>/odoo.conf -u module_name --workers 0 --stop-after-init --logfile=
+
+# Interactive shell on a session
+{{ odoo_cmd }} shell -c ${{ project_dir_var }}/.worktrees/_env/<slug>/odoo.conf --workers 0 --no-http
+
+# Run a specific test class/method in a session
+{{ odoo_cmd }} -c ${{ project_dir_var }}/.worktrees/_env/<slug>/odoo.conf -u module_name --workers 0 --http-port <free port> --test-enable --test-tags module_name.test_file_name --stop-after-init --logfile=
+{% else %}
 # Services
 systemctl --user {start|stop|restart|status} odoo{{ service_suffix }}.service postgres{{ service_suffix }}.service nginx{{ service_suffix }}.service
 
@@ -26,6 +51,7 @@ systemctl --user {start|stop|restart|status} odoo{{ service_suffix }}.service po
 
 # Run a specific test class/method
 {{ odoo_cmd }} -c ${{ project_dir_var }}/odoo.conf -u module_name --workers 0 --test-enable --test-tags module_name.test_file_name --stop-after-init --logfile=
+{% endif %}
 
 # Clone/update repos and regenerate addon symlinks
 nix run .#update-repos

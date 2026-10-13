@@ -1,4 +1,25 @@
 # shellcheck shell=bash
+{% if dev_in_worktrees %}
+# Development setup: .env, addon repos, the local postgres cluster{% if backup_s3_bucket %}, S3 access for
+# the prod dump{% endif %}{% if prod_ssh_host %}, ssh{% endif %}{% if editor == 'vscode' %}, editor settings{% endif %} and the debug venv. No main Odoo and no
+# reverse proxy: every task runs in its own worktree env (worktree-env skill),
+# served on its own port, with its own database in this cluster.
+# The called scripts are on PATH (injected by flake.nix).
+set -e
+echo "=== Running create-env ==="
+create-env
+echo
+echo "=== Running update-repos ==="
+update-repos
+echo
+echo "=== Running setup-postgres ==="
+setup-postgres
+{% if backup_s3_bucket %}
+echo
+echo "=== Running create-aws-config ==="
+create-aws-config
+{% endif %}
+{% else %}
 # Full development setup: prod + local postgres + test{% if prod_ssh_host %} + ssh{% endif %}{% if editor == 'vscode' %} + editor settings{% endif %} + debug venv.
 # The called scripts are on PATH (injected by flake.nix).
 set -e
@@ -10,6 +31,7 @@ setup-postgres
 echo
 echo "=== Running setup of test server  ==="
 setup-test
+{% endif %}
 {% if prod_ssh_host %}
 echo
 echo "=== Running setup-ssh-access ==="

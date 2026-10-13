@@ -364,26 +364,23 @@ When you see a stale item, decide:
 State items are mirrored to prod Odoo tasks so the team sees the same queue.
 Everything identity-dependent (login, project, stages, chat) comes from
 [[user_identity]] — never hardcode a person; each teammate fills their own
-identity node on bootstrap. Prod credentials live in the project `.env` as
-the `ODOO_*_PROD` profile (`connect(env_profile="prod")` on the odoo MCP).
+identity node on bootstrap. Prod reads and writes go through the Odoo
+connector (claude.ai, signed in as the user: their own account and rights);
+nothing in the project holds a prod credential except the standup's own
+read-only `ODOO_*_PROD` lines in `.env`, the user's login and API key.
 
 **Hard rules:**
 - Mirrored tasks are **always assigned to the user** (uid from
-  [[user_identity]]), **never to the service account**.
+  [[user_identity]]).
 - `description` = a **full copy** of the item's content: the state line
   verbatim + the relevant journal excerpt that opened it (and the node body,
   if applicable). Reference footer (`Claude memory item [ID] — see
   journal/<date>`) on top. Simple HTML (`<p>`, `<code>`).
 
-**Service-account constraints** (verified on Kaertech prod 2026-06-10):
-- Custom access rules restrict `user_ids`/`stage_id` writes — the
-  service account must be in the project's **Task Assignors**
+**Write constraints:**
+- Custom access rules restrict `user_ids`/`stage_id` writes — your account
+  must be an assignee, the PM or in the project's **Task Assignors**
   (`task_assignor_ids`) to assign users and move stages of assigned tasks.
-- The service account has no sender email; core Odoo 16 sends the
-  assignment notice unconditionally, which would block assignment — fixed
-  by a customization: `_task_message_auto_subscribe_notify` honours
-  `mail_auto_subscribe_no_notify`, so assignment works **when the flag is
-  passed**.
 - Always `create`/`write` via `execute` (the plain tools can't pass
   context) with context `{"mail_create_nolog": true,
   "mail_create_nosubscribe": true, "mail_auto_subscribe_no_notify": true}`;
@@ -393,7 +390,7 @@ the `ODOO_*_PROD` profile (`connect(env_profile="prod")` on the odoo MCP).
 ### On adding a state item
 
 1. File it locally first (state.md + ID), as always.
-2. Mirror to prod: `connect(env_profile="prod")`, then `create` `project.task`:
+2. Mirror to prod over the Odoo connector: `create` `project.task`:
    - `name` = the state item description
    - `project_id` = default project from [[user_identity]]
    - `user_ids` = `[[6, 0, [<uid>]]]` — uid resolved by Odoo login from
@@ -403,7 +400,6 @@ the `ODOO_*_PROD` profile (`connect(env_profile="prod")` on the odoo MCP).
      journal/<date>` (plain text; never dump node/journal bodies into prod)
 3. Append the task id to the state line:
    `- [ID] DATE: desc — see journal/DATE [odoo:TASKID]`
-4. Restore the MCP: `connect(env_profile="default")`.
 
 Exceptions: the user says "local-only" → skip mirroring. Prod unreachable →
 append `[odoo:pending]` instead and mirror at the next natural prod touch.

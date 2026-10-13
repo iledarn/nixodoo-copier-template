@@ -2,9 +2,14 @@
 
 Things that surprised somebody once, kept out of [the README](../README.md) so it stays short.
 
-- `.mcp.json` points the `odoo` MCP server at
-  [okolovmark/odoo-fast-mcp](https://github.com/okolovmark/odoo-fast-mcp) —
-  swap the URL for your own if you prefer.
+- The project ships no Odoo MCP server. Production Odoo is the claude.ai Odoo connector each
+  developer connects with their own account (a server such as
+  [okolovmark/odoo-fast-mcp](https://github.com/okolovmark/odoo-fast-mcp) behind it); a worktree
+  env is read with `odoo shell` on its own conf or `psql`.
+- With the worktree-env skill (Claude Code and a custom addons repo), development runs no main
+  Odoo, no nginx and no main database: `setup-dev` skips `setup-prod`/`setup-test`, the
+  `dev-server` profile carries no nginx, and `download-backup` without an `odoo.conf` only
+  fetches the dump. A session's websocket works on its own port (`workers = 0`).
 - The `find-code` skill ships `lsp.py`, a daemon/CLI over
   [odoo-ls](https://github.com/odoo/odoo-ls) reading the generated `odools.toml`. Install
   the server once with `python3 .claude/skills/find-code/lsp.py bump <version>` (use

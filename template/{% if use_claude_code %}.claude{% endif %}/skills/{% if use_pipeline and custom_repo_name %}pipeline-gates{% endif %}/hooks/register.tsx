@@ -230,7 +230,7 @@ export const register: Register = on => {
     await $.tool.register({
       name: 'tasks',
       description:
-        "The block of tasks this pipeline run works through, and where each stands: the user watches it as progress in the pipeline pane and band. A block is one run (one Teams status, one grill alignment), so a task of the block never resets the gates. `add` the block's tasks, each \"KIO-1234 short title <its _url from the odoo MCP>\" (the URL gives the task an open button in the pane; a pipeline started with several keys has the keys already, add again to give titles and URLs). Then move them as the work goes: `active` when you start on a task, `done` when it is finished (its part is in the PR, or it closed without code), `pending` to put one back. Tasks that share one PR are yours to mark.",
+        "The block of tasks this pipeline run works through, and where each stands: the user watches it as progress in the pipeline pane and band. A block is one run (one Teams status, one grill alignment), so a task of the block never resets the gates. `add` the block's tasks, each \"KIO-1234 short title <its _url from the Odoo connector>\" (the URL gives the task an open button in the pane; a pipeline started with several keys has the keys already, add again to give titles and URLs). Then move them as the work goes: `active` when you start on a task, `done` when it is finished (its part is in the PR, or it closed without code), `pending` to put one back. Tasks that share one PR are yours to mark.",
       inputSchema: {
         type: 'object',
         properties: {

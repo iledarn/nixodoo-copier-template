@@ -75,11 +75,26 @@ def no_report_url_option():
 @case
 def report_url_param_pinned_before_the_restart():
     text = render()
-    marker = "VALUES ('report.url', 'http://127.0.0.1:$PORT')"
+    marker = "VALUES ('report.url', 'http://$DB.localhost:$PORT')"
     assert marker in text, "wt-start does not pin report.url"
     pin = text.index(marker)
     assert text.index('bash "$WT_SCRIPT_DIR/wt-restore.sh"') < pin < text.index("systemctl --user restart"), \
         "report.url must be pinned after the restore and before the restart"
+
+
+@case
+def the_host_names_the_database():
+    # http://wt_<slug>.localhost:<port>: %d is the first label of the Host, and
+    # *.localhost resolves to ::1, the only interface a session listens on (a
+    # prod copy with admin/admin stays off the LAN)
+    c = conf(render())
+    assert (c["dbfilter"], c["http_interface"]) == ("^%d\\$", "::1"), c
+    assert 'echo "URL: http://$DB.localhost:$PORT/web"' in render()
+
+
+@case
+def no_attachment_seed_from_a_main_database():
+    assert "SEED_FILESTORE" not in render()
 
 
 @case
