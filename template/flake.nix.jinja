@@ -246,9 +246,6 @@
 {% if editor == 'vscode' %}
                     create-vscode-settings = mkScript "create-vscode-settings" { };
 {% endif %}
-                    create-debug-venv = mkScript "create-debug-venv" {
-                        vars.PROJECT_PYTHON = "${appPythonEnv}/bin/python";
-                    };
                     setup-dev = mkScript "setup-dev" {
                         deps = [
 {% if dev_in_worktrees %}
@@ -269,7 +266,6 @@
 {% if editor == 'vscode' %}
                             create-vscode-settings
 {% endif %}
-                            create-debug-venv
                         ];
                     };
                 };

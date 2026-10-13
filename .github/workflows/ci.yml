@@ -29,7 +29,7 @@ jobs:
           - name: no-claude-18
             args: >-
               -d project_name=ci-plain -d odoo_version=18.0
-              -d use_claude_code=false -d editor=zed
+              -d use_claude_code=false
           - name: repo-no-s3-17
             args: >-
               -d project_name=ci-repo -d odoo_version=17.0

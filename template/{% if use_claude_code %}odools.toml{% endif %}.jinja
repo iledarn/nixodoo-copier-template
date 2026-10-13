@@ -1,11 +1,11 @@
 # OdooLS configuration — https://github.com/odoo/odoo-ls
-# Profile name must match "selectedProfile" in Zed settings.json.
+# Read by the find-code skill's LSP client (lsp.py) and by an editor's OdooLS.
 #
 # Paths use documented OdooLS variables:
 #   ${workspaceFolder} -> the folder opened in the editor (this project root)
 #   ${userHome}        -> the user's home directory
-# NOTE: ${workspaceFolder} only resolves correctly if you open the PROJECT
-# ROOT as the Zed workspace — opening a subfolder would break these paths.
+# NOTE: ${workspaceFolder} only resolves correctly from the PROJECT ROOT —
+# opening a subfolder would break these paths.
 
 [[config]]
 name = "{{ project_name }}"
