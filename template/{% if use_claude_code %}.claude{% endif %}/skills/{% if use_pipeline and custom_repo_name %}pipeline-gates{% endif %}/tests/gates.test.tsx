@@ -340,6 +340,8 @@ test('a block is one run: its tasks keep the gates, and the pane and band show h
     await pane.unmount()
     const band = await $.ui.mount({ ...BAND, surface })
     expect(await band.find({ text: '1/4' })).toBeDefined()
+    // no tip: nothing reveals on hover, nothing underlines
+    expect(JSON.stringify(await band.drawn())).not.toMatch(/"hover"|"display":"none"/)
     await band.unmount()
   }
 
