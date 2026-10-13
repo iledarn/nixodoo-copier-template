@@ -16,7 +16,7 @@ echo "╚═══════════════════════�
 echo ""
 echo "Project: ${{ project_dir_var }}"
 {% if dev_in_worktrees %}
-echo "Odoo: one worktree env per task (worktree-env skill), at http://wt_<slug>.localhost:<port>/web"
+echo "Odoo: one worktree env per pipeline run (worktree-env skill), at http://wt_<slug>.localhost:<port>/web"
 {% else %}
 echo "Odoo URL: http://localhost:$ODOO_NGINX_PORT"
 {% endif %}

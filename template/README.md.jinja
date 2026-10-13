@@ -282,8 +282,8 @@ systemctl --user restart odoo{{ service_suffix }}.service
 {% if dev_in_worktrees %}
 ### Quick Setup For Development
 
-There is no main Odoo, no Nginx and no main database in development: every task
-runs in its own worktree env (`.claude/skills/worktree-env`), with its own Odoo on
+There is no main Odoo, no Nginx and no main database in development: every pipeline
+run (one task, or a block of tasks) runs in its own worktree env (`.claude/skills/worktree-env`), with its own Odoo on
 its own port and its own restore of the prod dump in the shared PostgreSQL cluster.
 
 This will:
@@ -321,7 +321,7 @@ systemctl --user enable --now postgres{{ service_suffix }}.service
 nix run .#download-backup
 {% endif %}
 
-# A worktree env per task: start (idempotent), list, stop
+# A worktree env per pipeline run: start (idempotent), list, stop
 bash .claude/skills/worktree-env/scripts/wt-start.sh <slug>     # prints URL, CONF, DB, PORT
 bash .claude/skills/worktree-env/scripts/wt-list.sh
 bash .claude/skills/worktree-env/scripts/wt-stop.sh <slug>
