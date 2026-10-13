@@ -31,6 +31,7 @@ export type EnvSnapshot = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'odoo-env-band': { snapshot: EnvSnapshot | null; touched: Touched }
+    // isTipsOn: the ? toggle; off, a hover reveals nothing (kept in $.store across sessions)
+    'odoo-env-band': { snapshot: EnvSnapshot | null; touched: Touched; isTipsOn: boolean }
   }
 }

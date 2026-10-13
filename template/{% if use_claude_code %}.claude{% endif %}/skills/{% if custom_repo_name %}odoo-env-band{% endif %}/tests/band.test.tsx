@@ -22,8 +22,9 @@ const BAND = {
 type Use = { tool_use_id: string; tool: string; input: Record<string, unknown> }
 
 // two worktree envs on the machine (kio-1 up, kio-2 down); odoo, pg, nginx up
-function engine(on: On, cwd: string, history: Use[] = []): void {
+function engine(on: On, cwd: string, history: Use[] = [], store: Record<string, unknown> = {}): void {
   mock.clock(on)
+  mock.store(on, store)
   on('session.cwd', () => ({ value: cwd }))
   on('session.root', () => ({ value: PROJECT }))
   on('session.messages', () => ({ value: [{ role: 'assistant', text: '', toolUses: history }] }))
@@ -109,9 +110,28 @@ test('a session that works in neither: services, and the other envs as a count',
     expect(await ui.find({ text: `pg :${PORTS.pg} ●` })).toBeDefined()
     expect(await ui.find({ text: `nginx :${PORTS.nginx} ●` })).toBeDefined()
     expect(await ui.find({ text: '2 other wt envs' })).toBeDefined()
-    expect(await ui.find({ key: 'tip-env-others', text: /kio-1 :2701 up, kio-2 :2702 down/ })).toBeDefined()
     await ui.unmount()
   }
+})
+
+test('tips are off until the ? toggle, which the store keeps', async ($, on) => {
+  engine(on, PROJECT)
+  await $.session.start({ cwd: PROJECT, surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'true' })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect(await ui.find({ key: 'tip-env-services' })).toBeUndefined()
+  // nor does a segment join a hover group
+  const underlined = async () => JSON.stringify(await ui.drawn()).includes('"underline":true')
+  expect(await underlined()).toBe(false)
+  await ui.press({ key: 'env-tips' })
+  expect(await ui.find({ key: 'tip-env-others', text: /kio-1 :2701 up, kio-2 :2702 down/ })).toBeDefined()
+  expect(await underlined()).toBe(true)
+  // a new session reads the choice back from the store
+  await $.session.start({ cwd: PROJECT, surface: 'desktop', isInteractive: true })
+  expect(await ui.find({ key: 'tip-env-services' })).toBeDefined()
+  await ui.press({ key: 'env-tips' })
+  expect(await ui.find({ key: 'tip-env-services' })).toBeUndefined()
+  await ui.unmount()
 })
 
 test('an edit in a worktree and git in addons, earlier in the transcript, show both', async ($, on) => {
@@ -119,7 +139,7 @@ test('an edit in a worktree and git in addons, earlier in the transcript, show b
     { tool_use_id: 'a', tool: 'Edit', input: { file_path: '/p/.worktrees/kio-1/m/x.py' } },
     { tool_use_id: 'b', tool: 'Bash', input: { command: `git -C /p/${ADDONS} pull` } },
     { tool_use_id: 'c', tool: 'Write', input: { file_path: '/p/docs/adr/0050-x.md', content: '' } },
-  ])
+  ], { isTipsOn: true })
   await $.session.start({ cwd: PROJECT, surface: 'desktop', isInteractive: true })
   await $.tool.call({ tool: 'Bash', command: 'true' })
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
@@ -127,8 +147,12 @@ test('an edit in a worktree and git in addons, earlier in the transcript, show b
   expect(await ui.find({ text: /^env$/ })).toBeDefined()
   expect(await ui.find({ text: '↑1 ahead' })).toBeDefined()
   expect(await ui.find({ key: 'tip-env-env' })).toBeDefined()
-  expect(await ui.find({ text: 'kio-1-feature' })).toBeDefined()
-  expect(await ui.find({ text: ':2701 ● up' })).toBeDefined()
+  // a worktree's port and state sit right after its label, before its branch
+  const wt = (await ui.findAll({ type: 'Text' })).map(text => text.text)
+  const label = wt.indexOf('wt')
+  expect(wt.slice(label, label + 3)).toEqual(['wt', ':2701 ● up', 'kio-1-feature'])
+  // a bar between each two groups: env, addons, the worktree, the services, the other envs
+  expect(await ui.findAll({ type: 'Text', text: '│' })).toHaveLength(4)
   expect(await ui.find({ text: '1 other wt env' })).toBeDefined()
   expect(await ui.find({ key: 'tip-env-wt-0', text: /db wt_kio_1/ })).toBeDefined()
   await ui.unmount()

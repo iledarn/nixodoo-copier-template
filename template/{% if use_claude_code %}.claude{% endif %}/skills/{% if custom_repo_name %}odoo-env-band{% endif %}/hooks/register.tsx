@@ -23,7 +23,7 @@ const SERVICES = [
 
 type Tip = 'env-env' | 'env-addons' | 'env-branch' | 'env-dirty' | 'env-sync' | 'env-services' | 'env-others' | `env-wt-${number}`
 
-// what each segment means; shown above the row while the pointer is on the segment
+// what each segment means; with the ? toggle on, shown above the row while the pointer is on the segment
 const TIPS: { scope: Tip; text: string }[] = [
   {
     scope: 'env-env',
@@ -50,6 +50,9 @@ const TIPS: { scope: Tip; text: string }[] = [
 
 const snapshot = atom({ plugin: 'odoo-env-band', key: 'snapshot' } as const, null)
 const touched = atom({ plugin: 'odoo-env-band', key: 'touched' } as const, { env: false, addons: false, wts: [] })
+// the ? toggle: off (the default), a hover neither underlines a segment nor reveals its tip
+const isTipsOn = atom({ plugin: 'odoo-env-band', key: 'isTipsOn' } as const, false)
+const TIPS_STORE_KEY = 'isTipsOn'
 
 let project: string | null = null
 
@@ -160,6 +163,8 @@ async function rescan($: EngineInterface): Promise<void> {
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
+    const isOn = (await $.store.get(TIPS_STORE_KEY)) === true
+    await update($, isTipsOn, () => isOn)
     await rescan($)
     void refresh($)
     $.clock.every(REFRESH_MS, () => void refresh($))
@@ -189,31 +194,32 @@ export const register: Register = on => {
     const env = await read($, snapshot)
     if (env === null || e.props.hasSurvey) return below
 
-    const { Box, Text } = $.ui.resolve(e)
+    const { Box, Button, Text } = $.ui.resolve(e)
     const mine = env.wts.filter(wt => wt.isMine)
     const others = env.wts.filter(wt => !wt.isMine)
-    // a segment joins its tip's hover group: pointing at it underlines it and reveals the tip row
-    const hint = (scope: Tip) => ({ scope, underline: true })
+    const isOn = await read($, isTipsOn)
+    // with tips on, a segment joins its tip's hover group: pointing at it underlines it and reveals the tip row
+    const hint = (scope: Tip) => (isOn ? { hover: { scope, underline: true } } : {})
 
     const gitState = (git: GitStatus | null, defaults: readonly string[], isWorktree: boolean) =>
       git === null ? (
         <Text color="red">no git</Text>
       ) : (
         <Box flexDirection="row" columnGap={1}>
-          <Text bold color={defaults.includes(git.branch) ? undefined : 'cyan'} hover={hint('env-branch')}>
+          <Text bold color={defaults.includes(git.branch) ? undefined : 'cyan'} {...hint('env-branch')}>
             {git.hasUpstream || defaults.includes(git.branch) || isWorktree
               ? git.branch
               : `${git.branch} (local)`}
           </Text>
           {git.dirty > 0 ? (
-            <Text color="yellow" hover={hint('env-dirty')}>{`±${git.dirty} changed`}</Text>
+            <Text color="yellow" {...hint('env-dirty')}>{`±${git.dirty} changed`}</Text>
           ) : (
-            <Text color="green" hover={hint('env-dirty')}>
+            <Text color="green" {...hint('env-dirty')}>
               ✓ clean
             </Text>
           )}
-          {git.ahead > 0 && <Text dimColor hover={hint('env-sync')}>{`↑${git.ahead} ahead`}</Text>}
-          {git.behind > 0 && <Text color="yellow" hover={hint('env-sync')}>{`↓${git.behind} behind`}</Text>}
+          {git.ahead > 0 && <Text dimColor {...hint('env-sync')}>{`↑${git.ahead} ahead`}</Text>}
+          {git.behind > 0 && <Text color="yellow" {...hint('env-sync')}>{`↓${git.behind} behind`}</Text>}
         </Box>
       )
 
@@ -240,60 +246,89 @@ export const register: Register = on => {
       scope === 'env-services' ||
       (scope === 'env-env' ? env.env !== null : scope === 'env-addons' ? env.addons !== null : hasCheckout)
 
-    const row = (
-      <Box key="odoo-env" flexDirection="row" columnGap={1} flexWrap="wrap">
-        {env.env !== null && (
-          <Box flexDirection="row" columnGap={1}>
-            <Text dimColor hover={hint('env-env')}>
-              env
-            </Text>
-            {gitState(env.env.git, ENV_BRANCHES, false)}
-            <Text dimColor>·</Text>
-          </Box>
-        )}
-        {env.addons !== null && (
-          <Box flexDirection="row" columnGap={1}>
-            <Text dimColor hover={hint('env-addons')}>
-              addons
-            </Text>
-            {gitState(env.addons.git, [ADDONS_BRANCH], false)}
-            <Text dimColor>·</Text>
-          </Box>
-        )}
-        {mine.map((wt, i) => (
-          <Box flexDirection="row" columnGap={1}>
-            <Text dimColor hover={hint(`env-wt-${i}`)}>
-              wt
-            </Text>
-            {gitState(wt.git, [ADDONS_BRANCH], true)}
-            <Text color={wt.isActive ? 'green' : undefined} dimColor={!wt.isActive} hover={hint(`env-wt-${i}`)}>
-              {`:${wt.port} ${wt.isActive ? '● up' : '○ down'}`}
-            </Text>
-            <Text dimColor>·</Text>
-          </Box>
-        ))}
+    // one group per checkout (a worktree's port and state right after its label), the main services, the other envs
+    const groups: JSX.Element[] = [
+      ...(env.env === null
+        ? []
+        : [
+            <Box flexDirection="row" columnGap={1}>
+              <Text dimColor {...hint('env-env')}>
+                env
+              </Text>
+              {gitState(env.env.git, ENV_BRANCHES, false)}
+            </Box>,
+          ]),
+      ...(env.addons === null
+        ? []
+        : [
+            <Box flexDirection="row" columnGap={1}>
+              <Text dimColor {...hint('env-addons')}>
+                addons
+              </Text>
+              {gitState(env.addons.git, [ADDONS_BRANCH], false)}
+            </Box>,
+          ]),
+      ...mine.map((wt, i) => (
+        <Box flexDirection="row" columnGap={1}>
+          <Text dimColor {...hint(`env-wt-${i}`)}>
+            wt
+          </Text>
+          <Text color={wt.isActive ? 'green' : undefined} dimColor={!wt.isActive} {...hint(`env-wt-${i}`)}>
+            {`:${wt.port} ${wt.isActive ? '● up' : '○ down'}`}
+          </Text>
+          {gitState(wt.git, [ADDONS_BRANCH], true)}
+        </Box>
+      )),
+      <Box flexDirection="row" columnGap={1}>
         {env.services.map(service => (
-          <Text color={service.isActive ? 'green' : 'red'} hover={hint('env-services')}>
+          <Text color={service.isActive ? 'green' : 'red'} {...hint('env-services')}>
             {`${service.name} :${service.port} ${service.isActive ? '●' : '○'}`}
           </Text>
         ))}
-        {others.length > 0 && <Text dimColor>·</Text>}
-        {others.length > 0 && (
-          <Text dimColor hover={hint('env-others')}>
-            {`${others.length} other wt env${others.length === 1 ? '' : 's'}`}
-          </Text>
-        )}
+      </Box>,
+      ...(others.length === 0
+        ? []
+        : [
+            <Text dimColor {...hint('env-others')}>
+              {`${others.length} other wt env${others.length === 1 ? '' : 's'}`}
+            </Text>,
+          ]),
+    ]
+
+    const row = (
+      <Box key="odoo-env" flexDirection="row" columnGap={1}>
+        <Box flexDirection="row" columnGap={1} flexWrap="wrap" flexGrow={1}>
+          {groups.map((group, i) => (
+            <Box flexDirection="row" columnGap={1}>
+              {group}
+              {i < groups.length - 1 && <Text dimColor>│</Text>}
+            </Box>
+          ))}
+        </Box>
+        <Button
+          key="env-tips"
+          label="?"
+          plain
+          dimColor={!isOn}
+          variant={isOn ? 'primary' : 'secondary'}
+          onPress={async () => {
+            const isNowOn = !(await read($, isTipsOn))
+            await update($, isTipsOn, () => isNowOn)
+            await $.store.set(TIPS_STORE_KEY, isNowOn)
+          }}
+        />
       </Box>
     )
     return (
       <Box flexDirection="column">
         {/* every band plugin draws its tips before the plugins beneath it and its rows after them: all tips sit on top */}
-        {[...TIPS.filter(tip => isTipShown(tip.scope)), ...dynamicTips].map(tip => (
-          <Box key={`tip-${tip.scope}`} display="none" hover={{ scope: tip.scope, display: 'flex' }} flexDirection="row" columnGap={1}>
-            <Text color="cyan">ⓘ</Text>
-            <Text dimColor>{tip.text}</Text>
-          </Box>
-        ))}
+        {isOn &&
+          [...TIPS.filter(tip => isTipShown(tip.scope)), ...dynamicTips].map(tip => (
+            <Box key={`tip-${tip.scope}`} display="none" hover={{ scope: tip.scope, display: 'flex' }} flexDirection="row" columnGap={1}>
+              <Text color="cyan">ⓘ</Text>
+              <Text dimColor>{tip.text}</Text>
+            </Box>
+          ))}
         {below}
         {row}
       </Box>
