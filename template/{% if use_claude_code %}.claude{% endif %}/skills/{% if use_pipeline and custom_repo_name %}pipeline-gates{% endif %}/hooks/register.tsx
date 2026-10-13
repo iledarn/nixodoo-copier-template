@@ -417,34 +417,20 @@ export const register: Register = on => {
     const current = await read($, run)
     if (!isActive(current) || e.props.hasSurvey) return below
     const { Box, Button, Text } = $.ui.resolve(e)
-    const hint = { scope: 'pipeline-gates', underline: true }
     const counts = taskCounts(current)
     const mark = (gate: Gate | null, holds: boolean) => (holds && isOpen(gate) ? '✓' : '○')
 
     return (
       <Box flexDirection="column">
-        {/* every band plugin draws its tips before the plugins beneath it and its rows after them: all tips sit on top */}
-        <Box key="tip-pipeline-gates" display="none" hover={{ scope: 'pipeline-gates', display: 'flex' }} flexDirection="row" columnGap={1}>
-          <Text color="cyan">ⓘ</Text>
-          <Text dimColor>
-            This session runs the pipeline: its phase and the gates the pipeline-gates mod enforces. Teams status and grill
-            gate the dev agent and worktree edits, the QC verdict gates gh pr create. For a block of tasks, done/total.
-            open = the pipeline pane.
-          </Text>
-        </Box>
         {below}
         <Box key="pipeline-row" flexDirection="row" columnGap={1} alignItems="center">
-          <Text dimColor hover={hint}>
-            pipeline
-          </Text>
-          <Text bold hover={hint}>
-            {current.task || 'task?'}
-          </Text>
-          {counts.total > 1 && <Text color={counts.done === counts.total ? 'green' : 'cyan'} hover={hint}>{`${counts.done}/${counts.total}`}</Text>}
-          <Text hover={hint}>{`${current.phase} ${PHASES[current.phase]}`}</Text>
-          <Text color={isOpen(current.status) ? 'green' : 'yellow'} hover={hint}>{`status ${mark(current.status, true)}`}</Text>
-          <Text color={isOpen(current.grill) ? 'green' : 'yellow'} hover={hint}>{`grill ${mark(current.grill, true)}`}</Text>
-          <Text color={qcHolds(current) ? 'green' : 'yellow'} hover={hint}>{`qc ${mark(current.qc, qcHolds(current))}`}</Text>
+          <Text dimColor>pipeline</Text>
+          <Text bold>{current.task || 'task?'}</Text>
+          {counts.total > 1 && <Text color={counts.done === counts.total ? 'green' : 'cyan'}>{`${counts.done}/${counts.total}`}</Text>}
+          <Text>{`${current.phase} ${PHASES[current.phase]}`}</Text>
+          <Text color={isOpen(current.status) ? 'green' : 'yellow'}>{`status ${mark(current.status, true)}`}</Text>
+          <Text color={isOpen(current.grill) ? 'green' : 'yellow'}>{`grill ${mark(current.grill, true)}`}</Text>
+          <Text color={qcHolds(current) ? 'green' : 'yellow'}>{`qc ${mark(current.qc, qcHolds(current))}`}</Text>
           <Button key="pipeline-open" label="open" onPress={() => $.ui.open({ id: PANE, title: 'pipeline' })} />
         </Box>
       </Box>

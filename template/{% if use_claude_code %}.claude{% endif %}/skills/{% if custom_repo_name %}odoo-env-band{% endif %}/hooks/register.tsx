@@ -12,7 +12,7 @@ import {
   wtDb,
 } from './env'
 import type { Where } from './env'
-import { ADDONS, ADDONS_BRANCH, ANSWERS_FILE, DB_NAME, ENV_BRANCHES, PORTS, SERVICE_SUFFIX } from './config'
+import { ADDONS, ADDONS_BRANCH, ANSWERS_FILE, ENV_BRANCHES, PORTS, SERVICE_SUFFIX } from './config'
 
 const REFRESH_MS = 20_000
 const SERVICES = [
@@ -21,38 +21,8 @@ const SERVICES = [
   { name: 'nginx', unit: `nginx${SERVICE_SUFFIX}.service`, port: PORTS.nginx },
 ] as const
 
-type Tip = 'env-env' | 'env-addons' | 'env-branch' | 'env-dirty' | 'env-sync' | 'env-services' | 'env-others' | `env-wt-${number}`
-
-// what each segment means; with the ? toggle on, shown above the row while the pointer is on the segment
-const TIPS: { scope: Tip; text: string }[] = [
-  {
-    scope: 'env-env',
-    text: 'The env repo itself (this project: flake, .claude, docs/adr, scripts): shown because this session edited files in it or ran a changing git command there.',
-  },
-  {
-    scope: 'env-addons',
-    text: `The main checkout of the custom modules, ${ADDONS}: shown because this session edited files or ran git in it.`,
-  },
-  {
-    scope: 'env-branch',
-    text: `The checkout's branch: plain on its default (env ${ENV_BRANCHES.join('/')}, addons ${ADDONS_BRANCH}), cyan on any other; "(local)" = no upstream yet.`,
-  },
-  { scope: 'env-dirty', text: 'Working tree: ✓ clean, or ±N files changed, staged or untracked (git status).' },
-  {
-    scope: 'env-sync',
-    text: '↓N behind: commits on the upstream branch not pulled yet. ↑N ahead: local commits not pushed. As of the last fetch.',
-  },
-  {
-    scope: 'env-services',
-    text: `The local dev stack (systemctl --user): ${SERVICES[0].unit} on :${PORTS.odoo} (db ${DB_NAME}), ${SERVICES[1].unit} on :${PORTS.pg} (${DB_NAME} and every wt_* db), ${SERVICES[2].unit} proxy on :${PORTS.nginx}. ● up, ○ down.`,
-  },
-]
-
 const snapshot = atom({ plugin: 'odoo-env-band', key: 'snapshot' } as const, null)
 const touched = atom({ plugin: 'odoo-env-band', key: 'touched' } as const, { env: false, addons: false, wts: [] })
-// the ? toggle: off (the default), a hover neither underlines a segment nor reveals its tip
-const isTipsOn = atom({ plugin: 'odoo-env-band', key: 'isTipsOn' } as const, false)
-const TIPS_STORE_KEY = 'isTipsOn'
 
 let project: string | null = null
 
@@ -163,8 +133,6 @@ async function rescan($: EngineInterface): Promise<void> {
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
-    const isOn = (await $.store.get(TIPS_STORE_KEY)) === true
-    await update($, isTipsOn, () => isOn)
     await rescan($)
     void refresh($)
     $.clock.every(REFRESH_MS, () => void refresh($))
@@ -194,57 +162,29 @@ export const register: Register = on => {
     const env = await read($, snapshot)
     if (env === null || e.props.hasSurvey) return below
 
-    const { Box, Button, Text } = $.ui.resolve(e)
+    const { Box, Text } = $.ui.resolve(e)
     const mine = env.wts.filter(wt => wt.isMine)
     const others = env.wts.filter(wt => !wt.isMine)
-    const isOn = await read($, isTipsOn)
-    // with tips on, a segment joins its tip's hover group: pointing at it underlines it and reveals the tip row
-    const hint = (scope: Tip) => (isOn ? { hover: { scope, underline: true } } : {})
 
     const gitState = (git: GitStatus | null, defaults: readonly string[], isWorktree: boolean) =>
       git === null ? (
         <Text color="red">no git</Text>
       ) : (
         <Box flexDirection="row" columnGap={1}>
-          <Text bold color={defaults.includes(git.branch) ? undefined : 'cyan'} {...hint('env-branch')}>
+          <Text bold color={defaults.includes(git.branch) ? undefined : 'cyan'}>
             {git.hasUpstream || defaults.includes(git.branch) || isWorktree
               ? git.branch
               : `${git.branch} (local)`}
           </Text>
           {git.dirty > 0 ? (
-            <Text color="yellow" {...hint('env-dirty')}>{`±${git.dirty} changed`}</Text>
+            <Text color="yellow">{`±${git.dirty} changed`}</Text>
           ) : (
-            <Text color="green" {...hint('env-dirty')}>
-              ✓ clean
-            </Text>
+            <Text color="green">✓ clean</Text>
           )}
-          {git.ahead > 0 && <Text dimColor {...hint('env-sync')}>{`↑${git.ahead} ahead`}</Text>}
-          {git.behind > 0 && <Text color="yellow" {...hint('env-sync')}>{`↓${git.behind} behind`}</Text>}
+          {git.ahead > 0 && <Text dimColor>{`↑${git.ahead} ahead`}</Text>}
+          {git.behind > 0 && <Text color="yellow">{`↓${git.behind} behind`}</Text>}
         </Box>
       )
-
-    const dynamicTips: { scope: Tip; text: string }[] = [
-      ...mine.map((wt, i) => ({
-        scope: `env-wt-${i}` as const,
-        text: `Worktree env this session works in: .worktrees/${wt.slug}, Odoo odoo${SERVICE_SUFFIX}-wt@${wt.slug} on :${wt.port} (${wt.isActive ? 'up' : 'down'}), db ${wt.db}.`,
-      })),
-      ...(others.length === 0
-        ? []
-        : [
-            {
-              scope: 'env-others' as const,
-              text: `Worktree envs of other sessions on this machine: ${others
-                .map(wt => `${wt.slug} :${wt.port} ${wt.isActive ? 'up' : 'down'}`)
-                .join(', ')}.`,
-            },
-          ]),
-    ]
-
-    // a tip only for a segment that is drawn
-    const hasCheckout = env.env !== null || env.addons !== null || mine.length > 0
-    const isTipShown = (scope: Tip) =>
-      scope === 'env-services' ||
-      (scope === 'env-env' ? env.env !== null : scope === 'env-addons' ? env.addons !== null : hasCheckout)
 
     // one group per checkout (a worktree's port and state right after its label), the main services, the other envs
     const groups: JSX.Element[] = [
@@ -252,9 +192,7 @@ export const register: Register = on => {
         ? []
         : [
             <Box flexDirection="row" columnGap={1}>
-              <Text dimColor {...hint('env-env')}>
-                env
-              </Text>
+              <Text dimColor>env</Text>
               {gitState(env.env.git, ENV_BRANCHES, false)}
             </Box>,
           ]),
@@ -262,18 +200,14 @@ export const register: Register = on => {
         ? []
         : [
             <Box flexDirection="row" columnGap={1}>
-              <Text dimColor {...hint('env-addons')}>
-                addons
-              </Text>
+              <Text dimColor>addons</Text>
               {gitState(env.addons.git, [ADDONS_BRANCH], false)}
             </Box>,
           ]),
-      ...mine.map((wt, i) => (
+      ...mine.map(wt => (
         <Box flexDirection="row" columnGap={1}>
-          <Text dimColor {...hint(`env-wt-${i}`)}>
-            wt
-          </Text>
-          <Text color={wt.isActive ? 'green' : undefined} dimColor={!wt.isActive} {...hint(`env-wt-${i}`)}>
+          <Text dimColor>wt</Text>
+          <Text color={wt.isActive ? 'green' : undefined} dimColor={!wt.isActive}>
             {`:${wt.port} ${wt.isActive ? '● up' : '○ down'}`}
           </Text>
           {gitState(wt.git, [ADDONS_BRANCH], true)}
@@ -281,7 +215,7 @@ export const register: Register = on => {
       )),
       <Box flexDirection="row" columnGap={1}>
         {env.services.map(service => (
-          <Text color={service.isActive ? 'green' : 'red'} {...hint('env-services')}>
+          <Text color={service.isActive ? 'green' : 'red'}>
             {`${service.name} :${service.port} ${service.isActive ? '●' : '○'}`}
           </Text>
         ))}
@@ -289,46 +223,22 @@ export const register: Register = on => {
       ...(others.length === 0
         ? []
         : [
-            <Text dimColor {...hint('env-others')}>
-              {`${others.length} other wt env${others.length === 1 ? '' : 's'}`}
-            </Text>,
+            <Text dimColor>{`${others.length} other wt env${others.length === 1 ? '' : 's'}`}</Text>,
           ]),
     ]
 
     const row = (
-      <Box key="odoo-env" flexDirection="row" columnGap={1}>
-        <Box flexDirection="row" columnGap={1} flexWrap="wrap" flexGrow={1}>
-          {groups.map((group, i) => (
-            <Box flexDirection="row" columnGap={1}>
-              {group}
-              {i < groups.length - 1 && <Text dimColor>│</Text>}
-            </Box>
-          ))}
-        </Box>
-        <Button
-          key="env-tips"
-          label="?"
-          plain
-          dimColor={!isOn}
-          variant={isOn ? 'primary' : 'secondary'}
-          onPress={async () => {
-            const isNowOn = !(await read($, isTipsOn))
-            await update($, isTipsOn, () => isNowOn)
-            await $.store.set(TIPS_STORE_KEY, isNowOn)
-          }}
-        />
+      <Box key="odoo-env" flexDirection="row" columnGap={1} flexWrap="wrap">
+        {groups.map((group, i) => (
+          <Box flexDirection="row" columnGap={1}>
+            {group}
+            {i < groups.length - 1 && <Text dimColor>│</Text>}
+          </Box>
+        ))}
       </Box>
     )
     return (
       <Box flexDirection="column">
-        {/* every band plugin draws its tips before the plugins beneath it and its rows after them: all tips sit on top */}
-        {isOn &&
-          [...TIPS.filter(tip => isTipShown(tip.scope)), ...dynamicTips].map(tip => (
-            <Box key={`tip-${tip.scope}`} display="none" hover={{ scope: tip.scope, display: 'flex' }} flexDirection="row" columnGap={1}>
-              <Text color="cyan">ⓘ</Text>
-              <Text dimColor>{tip.text}</Text>
-            </Box>
-          ))}
         {below}
         {row}
       </Box>
