@@ -37,8 +37,9 @@ systemctl --user {start|stop|restart|status} postgres{{ service_suffix }}.servic
 # Interactive shell on a session
 {{ odoo_cmd }} shell -c ${{ project_dir_var }}/.worktrees/_env/<slug>/odoo.conf --workers 0 --no-http
 
-# Run a specific test class/method in a session
-{{ odoo_cmd }} -c ${{ project_dir_var }}/.worktrees/_env/<slug>/odoo.conf -u module_name --workers 0 --http-port <free port> --test-enable --test-tags module_name.test_file_name --stop-after-init --logfile=
+# Run a specific test class/method in a session (its conf and DB, a free port, the
+# IPv4 loopback HttpCase needs, a dbfilter naming the session DB)
+bash .claude/skills/worktree-env/scripts/wt-test.sh <slug> -u module_name --test-enable --test-tags module_name.test_file_name
 {% else %}
 # Services
 systemctl --user {start|stop|restart|status} odoo{{ service_suffix }}.service postgres{{ service_suffix }}.service nginx{{ service_suffix }}.service

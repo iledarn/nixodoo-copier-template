@@ -37,6 +37,9 @@ Invoke by absolute path under `${{ project_dir_var }}/.claude/skills/worktree-en
 - `wt-bootstrap.sh` — one-time, light: installs the `odoo{{ service_suffix }}-wt@.service` template unit
   and checks the seed dump is present. **No DB work.**
   `wt-start.sh` calls it automatically.
+- **`wt-test.sh <slug> <odoo args...>`** — a one-shot run against the session, tests
+  above all (`wt-test.sh <slug> -u <module> --test-enable --test-tags /<module>`):
+  the session conf and DB, a free port, the IPv4 loopback, a dbfilter naming the DB.
 - `wt-link.sh <tree> <farm>` / `wt-restore.sh <slug>` — internals used by `wt-start`.
 
 **Slug** = kebab branch name, conventionally `<kio-key-lower>-<short-desc>`
@@ -88,7 +91,11 @@ the newest file is used. If `wt-start` reports no dump, ask the user to drop one
   so live updates, chat and notifications work with no nginx and no evented port;
   only the prod layout (workers + evented port behind a proxy) cannot be reproduced
   here. The `queue_job` runner still starts in threaded mode against the session
-  DB — jobs process normally and isolated.
+  DB — jobs process normally and isolated. It calls the session back at
+  `http://wt_<slug>.localhost:<PORT>/queue_job/runjob` (the conf's `[queue_job]`
+  section): left to `http_interface` its host would be `::1`, an invalid URL host,
+  and `^%d$` passes only a Host carrying the DB name. Channels: `root:3`; a
+  sub-channel the conf does not name runs in its parent.
 - **The DB name is the subdomain:** sessions run `dbfilter = ^%d$`, so `<URL>` is
   `http://wt_<slug>.localhost:<PORT>` and bare `localhost:<PORT>` lands on the DB
   selector. The point is the browser: cookies are per host, not per port, so two
@@ -110,13 +117,13 @@ the newest file is used. If `wt-start` reports no dump, ask the user to drop one
   `env['res.users'].browse(<uid>).password = '...'`, commit); the next restore
   resets it. Limit: `report.url` stays pinned to `<URL>`, so wkhtmltopdf fetches
   report assets with the main host's session.
-- **A test run takes the session's port unless told otherwise.** With the
-  session service stopped for a CLI test run, the test server binds the port in
-  the session `odoo.conf`, and a browser tab still open on `<URL>` - logged in,
-  polling its systray and bus - sends its requests into the running tests'
-  transaction: tests die on state they never set, as the tab's user. Pass
-  `--http-port <free port>` to every test run against a session, so such a tab
-  gets a refused connection instead.
+- **Run tests through `wt-test.sh`, never `odoo -c <CONF>` by hand.** A bare run
+  breaks three ways: it takes the session's port, so a browser tab still open on
+  `<URL>` (logged in, polling its systray and bus) sends its requests into the
+  running tests' transaction and they die on state they never set; it listens on
+  `::1` only, while HttpCase talks to `127.0.0.1`; and `^%d$` maps the Host
+  `127.0.0.1` to no database. `wt-test.sh` takes a free port, listens on
+  `127.0.0.1` (still loopback only) and passes `--db-filter ^<DB>$`.
 - **Reading or checking a session from Claude:** `{{ odoo_cmd }} shell -c <CONF> --no-http`
   with a script on stdin (as a given user: `env = env(user=env.ref('base.user_admin'))`
   or `record.with_user(user)`), or `psql -d wt_<slug>` for plain reads. There is no

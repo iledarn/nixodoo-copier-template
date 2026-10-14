@@ -20,6 +20,7 @@ SRC = pathlib.Path(
     "template/{% if use_claude_code %}.claude{% endif %}/skills"
     "/{% if custom_repo_name %}worktree-env{% endif %}/scripts/wt-start.sh.jinja"
 )
+TEST_SRC = SRC.with_name("wt-test.sh.jinja")
 
 BASE = dict(
     odoo_version="16.0", odoo_major="16", use_queue_job=True, db_user="odoo", db_password="odoo",
@@ -32,9 +33,20 @@ def render(**answers):
     return env.from_string(SRC.read_text()).render(**{**BASE, **answers})
 
 
-def conf(text):
+def sections(text):
     block = re.search(r'cat > "\$CONF" <<EOF\n(.*?)\nEOF\n', text, re.S).group(1)
-    return dict(line.split(" = ", 1) for line in block.splitlines()[1:])
+    found, current = {}, None
+    for line in block.splitlines():
+        if re.fullmatch(r"\[[a-z_]+\]", line):
+            current = found.setdefault(line[1:-1], {})
+        elif line:
+            key, value = line.split(" = ", 1)
+            current[key] = value
+    return found
+
+
+def conf(text):
+    return sections(text)["options"]
 
 
 CASES = []
@@ -98,11 +110,29 @@ def no_attachment_seed_from_a_main_database():
 
 
 @case
-def every_line_of_the_block_is_one_option():
+def the_queue_job_runner_reaches_the_session():
+    # the runner's job URL is http://<host>:<port>/queue_job/runjob: left to http_interface
+    # the host is ::1 (an invalid URL host), and only the DB-named host passes ^%d$
+    c = sections(render(use_queue_job=True))["queue_job"]
+    assert c == {"channels": "root:3", "host": "$DB.localhost", "port": "$PORT"}, c
+    assert "queue_job" not in sections(render(use_queue_job=False))
+
+
+@case
+def a_test_run_talks_to_ipv4_loopback_with_the_session_db():
+    text = jinja2.Environment(trim_blocks=True, lstrip_blocks=True, keep_trailing_newline=True).from_string(
+        TEST_SRC.read_text()).render(nix_profile_rel=".nix-profile", module_prefix="acme")
+    run = text[text.index('exec "$HOME/.nix-profile/bin/odoo"'):]
+    for flag in ('-c "$CONF"', "--http-interface 127.0.0.1", '--http-port "$PORT"', '--db-filter "^${DB}\\$"', '"$@"'):
+        assert flag in run, (flag, run)
+
+
+@case
+def every_line_of_the_block_is_one_option_or_a_section():
     for answers in ({}, {"use_queue_job": False}, {"odoo_version": "20.0", "odoo_major": "20"}):
         block = re.search(r'<<EOF\n(.*?)\nEOF\n', render(**answers), re.S).group(1).splitlines()
         assert block[0] == "[options]", block[0]
-        assert all(re.fullmatch(r"[a-z_]+ = \S.*", line) for line in block[1:]), (answers, block)
+        assert all(re.fullmatch(r"[a-z_]+ = \S.*|\[[a-z_]+\]|", line) for line in block[1:]), (answers, block)
 
 
 if __name__ == "__main__":
