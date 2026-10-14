@@ -76,7 +76,18 @@ max_cron_threads = 0
 proxy_mode = False
 server_wide_modules = base,web{% if use_queue_job %},queue_job{% endif +%}
 workers = 0
+{% if use_queue_job %}
+
+[queue_job]
+channels = root:3
+host = $DB.localhost
+port = $PORT
+{% endif %}
 EOF
+# [queue_job] host: the runner calls http://<host>:<port>/queue_job/runjob. Left to
+# http_interface it would be ::1, an unbracketed and so invalid URL host; and dbfilter
+# ^%d$ finds the session DB only by a Host whose first label is the DB name, which
+# $DB.localhost is (resolving to ::1, where the session listens).
 
 bash "$WT_SCRIPT_DIR/wt-restore.sh" "$SLUG"
 

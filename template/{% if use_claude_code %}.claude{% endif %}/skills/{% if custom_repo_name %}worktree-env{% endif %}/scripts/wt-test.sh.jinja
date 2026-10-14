@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# One-shot Odoo run against a session env, a test run above all, with what it
+# needs beside the session's own service:
+#   - the session conf and DB;
+#   - a free port, so a browser tab left on <URL> cannot reach the tests;
+#   - the IPv4 loopback: HttpCase talks to 127.0.0.1 (odoo.tests HOST), while the
+#     session conf listens on ::1 only;
+#   - a dbfilter naming the session DB: the conf's ^%d$ maps the Host 127.0.0.1
+#     to no database at all.
+# Still loopback only, so the prod copy never reaches the LAN. Stop the session's
+# service first when the run updates modules (-u / -i): one process per DB.
+#
+# Usage: wt-test.sh <slug> <odoo args...>
+#   wt-test.sh kio-1234-x -u {{ module_prefix }}_mod --test-enable --test-tags /{{ module_prefix }}_mod
+set -euo pipefail
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/wt-common.sh"
+
+SLUG="${1:?usage: wt-test.sh <slug> <odoo args...>}"
+shift
+DB="$(db_name_for "$SLUG")"
+CONF="$WT_ENVROOT/$SLUG/odoo.conf"
+[ -f "$CONF" ] || { echo "ERROR: no session conf at $CONF - run wt-start.sh $SLUG first" >&2; exit 1; }
+PORT="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
+
+exec "$HOME/{{ nix_profile_rel }}/bin/odoo" -c "$CONF" --workers 0 --stop-after-init --logfile= \
+    --http-interface 127.0.0.1 --http-port "$PORT" --db-filter "^${DB}\$" "$@"

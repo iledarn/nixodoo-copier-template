@@ -318,21 +318,32 @@ uninstalled module runs 0 tests and exits green — use `-i`), grep for
 [references/gotchas.md](references/gotchas.md), "Believing a test run").
 
 {% if dev_in_worktrees %}
-Tests run against a worktree env (`worktree-env` skill): its conf is
-`.worktrees/_env/<slug>/odoo.conf`, and `--http-port <free port>` keeps a browser
-tab open on the session out of the run.
+Tests run against a worktree env (`worktree-env` skill) through its `wt-test.sh`,
+which adds what a session needs: its conf and DB, a free port (a browser tab open
+on the session stays out of the run), the IPv4 loopback HttpCase talks to, and a
+dbfilter naming the session DB. Stop the session's service first when the run
+updates modules.
 
-{% endif %}
 ```bash
 # All tests for a module
-{{ odoo_cmd }} -c {% if dev_in_worktrees %}${{ project_dir_var }}/.worktrees/_env/<slug>/odoo.conf{% else %}${{ project_dir_var }}/odoo.conf{% endif %} -u {{ module_prefix }}_<module> \
-    --workers 0{% if dev_in_worktrees %} --http-port <free port>{% endif %} --test-enable --stop-after-init --logfile=
+bash ${{ project_dir_var }}/.claude/skills/worktree-env/scripts/wt-test.sh <slug> -u {{ module_prefix }}_<module> --test-enable
 
 # Specific test class
-{{ odoo_cmd }} -c {% if dev_in_worktrees %}${{ project_dir_var }}/.worktrees/_env/<slug>/odoo.conf{% else %}${{ project_dir_var }}/odoo.conf{% endif %} -u {{ module_prefix }}_<module> \
-    --workers 0{% if dev_in_worktrees %} --http-port <free port>{% endif %} --test-enable --test-tags=/{{ module_prefix }}_<module>:TestClassName \
+bash ${{ project_dir_var }}/.claude/skills/worktree-env/scripts/wt-test.sh <slug> -u {{ module_prefix }}_<module> \
+    --test-enable --test-tags=/{{ module_prefix }}_<module>:TestClassName
+```
+{% else %}
+```bash
+# All tests for a module
+{{ odoo_cmd }} -c ${{ project_dir_var }}/odoo.conf -u {{ module_prefix }}_<module> \
+    --workers 0 --test-enable --stop-after-init --logfile=
+
+# Specific test class
+{{ odoo_cmd }} -c ${{ project_dir_var }}/odoo.conf -u {{ module_prefix }}_<module> \
+    --workers 0 --test-enable --test-tags=/{{ module_prefix }}_<module>:TestClassName \
     --stop-after-init --logfile=
 ```
+{% endif %}
 
 ## Anti-Patterns
 

@@ -20,8 +20,12 @@ each leaves an artifact (a test, a script, a log excerpt) that goes to the ticke
 ## Channel 1 — targeted test (preferred)
 
 ```bash
-{{ odoo_cmd }} -c {% if dev_in_worktrees %}${{ project_dir_var }}/.worktrees/_env/<slug>/odoo.conf{% else %}${{ project_dir_var }}/odoo.conf{% endif %} --workers 0 --stop-after-init --logfile= \
+{% if dev_in_worktrees %}
+bash ${{ project_dir_var }}/.claude/skills/worktree-env/scripts/wt-test.sh <slug> --test-enable --test-tags /{{ module_prefix }}_<module>:TestX.test_y
+{% else %}
+{{ odoo_cmd }} -c ${{ project_dir_var }}/odoo.conf --workers 0 --stop-after-init --logfile= \
     --http-port <free port> --test-enable --test-tags /{{ module_prefix }}_<module>:TestX.test_y
+{% endif %}
 ```
 
 - **No `-u` for a Python-only change**: `--test-tags` without `-u` re-runs the
