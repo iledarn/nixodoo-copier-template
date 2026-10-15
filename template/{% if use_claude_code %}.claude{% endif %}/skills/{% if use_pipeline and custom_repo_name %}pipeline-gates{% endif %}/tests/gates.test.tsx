@@ -8,12 +8,15 @@ import {
   blockLine,
   enterPhase,
   isDocPath,
+  isNewRound,
   isWorktreeCode,
   moveTasks,
   newRun,
   openGate,
   qcHolds,
   recordVerdict,
+  roundsLeft,
+  startRound,
   taskKeyIn,
   taskKeysIn,
   taskUrlIn,
@@ -39,7 +42,7 @@ const DEV = { tool: 'Agent', description: 'dev', prompt: 'build it', subagent_ty
 // what the person answers in the grill dialog, and what the mod asked and pushed
 type Person = { answer?: string; isAway?: boolean; questions: string[]; pushes: string[] }
 
-function engine(on: On, agents: { id: string; type: string }[] = [], person?: Person): void {
+function engine(on: On, agents: { id: string; type: string; name?: string }[] = [], person?: Person): void {
   mock.store(on)
   mock.clock(on, { now: 1_000_000 })
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
@@ -135,6 +138,24 @@ describe('rules', () => {
     expect(qcHolds(passed)).toBe(true)
     expect(qcHolds({ ...passed, lastChange: passed.seq + 1 })).toBe(false)
     expect(typeof enterPhase({ ...passed, lastChange: passed.seq + 1 }, 6, '', 5)).toBe('string')
+  })
+
+  test('a fix round is dev work after a review; the next task of a block counts afresh', () => {
+    const open = openGate(openGate(newRun('KIO-1', 0), 'status', 'sent', 1), 'grill', 'confirmed', 1)
+    const dev = enterPhase(open, 2, '', 2)
+    if (typeof dev === 'string') throw new Error(dev)
+    expect(isNewRound(dev)).toBe(false)
+    let run = startRound({ ...dev, phase: 3, seq: 5, lastReview: 5 })
+    expect([run.fixRounds, isNewRound(run), roundsLeft(run)]).toEqual([1, false, 2])
+    run = { ...run, seq: 9, lastReview: 9 }
+    expect(isNewRound(run)).toBe(true)
+    expect(isNewRound({ ...run, phase: 4 })).toBe(false)
+    const back = enterPhase(run, 2, '', 10)
+    if (typeof back === 'string') throw new Error(back)
+    expect(back.fixRounds).toBe(1)
+    const next = enterPhase({ ...run, phase: 5 }, 2, 'KIO-2', 11)
+    if (typeof next === 'string') throw new Error(next)
+    expect([next.fixRounds, isNewRound(next)]).toEqual([0, false])
   })
 })
 
@@ -363,4 +384,50 @@ test('a block task given its record URL gets an open link in the pane', async ($
     expect(await pane.find({ text: 'second' })).toBeDefined()
     await pane.unmount()
   }
+})
+
+test('each fix round goes to a fresh dev agent, and a fourth waits for you', async ($, on) => {
+  engine(on, [
+    { id: 'a-review', type: 'review' },
+    { id: 'a-dev', type: 'dev', name: 'kio-dev' },
+  ])
+  await $.session.start({ cwd: '/p', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'pipeline-gate', args: 'start KIO-9', ...TYPED })
+  await $.command.run({ command: 'pipeline-gate', args: 'open status teams is down', ...TYPED })
+  await $.command.run({ command: 'pipeline-gate', args: 'open grill agreed in chat', ...TYPED })
+  await $.tool.call({ tool: 'mcp__pipeline-gates__phase', phase: 2, task: 'KIO-9' })
+  expect((await $.tool.call(DEV)).deny).toBeUndefined()
+  const ask = { tool: 'SendMessage', to: 'kio-dev', message: 'one more thing' } as const
+  expect((await $.tool.call(ask)).deny).toBeUndefined()
+
+  await $.tool.call({ tool: 'mcp__pipeline-gates__phase', phase: 3 })
+  const reviewed = async (turnId: string) => {
+    await $.turn.complete({ answer: 'review done', durationMs: 1, isAborted: false, turnId, agentId: 'a-review', reason: 'answer' })
+  }
+  await reviewed('r1')
+  expect((await $.tool.call(ask)).deny).toContain('fresh dev agent')
+  expect((await $.tool.call({ ...ask, to: 'a-dev [ref]' })).deny).toContain('fresh dev agent')
+  expect((await $.tool.call({ tool: 'SendMessage', to: 'a-review', message: 'say more' })).deny).toBeUndefined()
+
+  for (const round of ['r2', 'r3']) {
+    expect((await $.tool.call(DEV)).deny).toBeUndefined()
+    // a second dev agent for the same round is the same round
+    expect((await $.tool.call(DEV)).deny).toBeUndefined()
+    await reviewed(round)
+  }
+  expect((await $.tool.call(DEV)).deny).toBeUndefined()
+  await reviewed('r4')
+  expect((await $.tool.call(DEV)).deny).toContain('fix round 4 is refused')
+
+  const byPlugin = await $.command.run({
+    command: 'pipeline-gate',
+    args: 'open rounds because',
+    origin: { kind: 'plugin', name: 'other' },
+    presentation: TYPED.presentation,
+  })
+  expect(byPlugin.text).toContain('only the person')
+  const granted = await $.command.run({ command: 'pipeline-gate', args: 'open rounds the design holds', ...TYPED })
+  expect(granted.text).toContain('fix rounds: 3 of 6')
+  expect((await $.tool.call(DEV)).deny).toBeUndefined()
+  expect(String((await $.tool.call({ tool: 'mcp__pipeline-gates__gates' })).result)).toContain('fix rounds: 4 of 6')
 })

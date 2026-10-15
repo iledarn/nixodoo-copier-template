@@ -245,12 +245,53 @@ export function recordVerdict(run: Run, verdict: string, summary: string, now: n
   return { ...next, qc: { isOpen: true, how: `pass: ${summary}`, at: now }, qcSeq: seq }
 }
 
+export const MAX_FIX_ROUNDS = 3
+
+// A fix round: dev work handed out in Phases 2-3 after a review finished since the last round began.
+// Several dev agents spawned for one round count once.
+export function isNewRound(run: Run): boolean {
+  return run.phase >= 2 && run.phase <= 3 && run.lastReview > (run.roundSeq ?? 0)
+}
+
+export function roundsLeft(run: Run): number {
+  return MAX_FIX_ROUNDS + (run.extraRounds ?? 0) - (run.fixRounds ?? 0)
+}
+
+export function startRound(run: Run): Run {
+  const [next, seq] = bump(run)
+  return { ...next, fixRounds: (run.fixRounds ?? 0) + 1, roundSeq: seq }
+}
+
+export function grantRounds(run: Run): Run {
+  return { ...run, extraRounds: (run.extraRounds ?? 0) + MAX_FIX_ROUNDS }
+}
+
+export function roundsLine(run: Run): string {
+  return `fix rounds: ${run.fixRounds ?? 0} of ${MAX_FIX_ROUNDS + (run.extraRounds ?? 0)}`
+}
+
+export function roundsRefusal(run: Run): string {
+  return `pipeline-gates: fix round ${(run.fixRounds ?? 0) + 1} is refused, the QC gate still blocks after ${run.fixRounds ?? 0} rounds. Stop and report to the user what still blocks, what keeps coming back, and the choice: narrow the design, split the rest into a follow-up task, or more rounds. Only the user grants more: /pipeline-gate open rounds <reason> (three more).`
+}
+
+// A finished agent re-reads its whole context on every call, and writes it to the cache again after a pause.
+export const RESUME_REFUSAL =
+  'pipeline-gates: a fix round goes to a fresh dev agent, not into one that already worked: spawn dev with a brief (the verified findings with their decisive lines, and `git diff --cached --stat <REVIEWED_TREE>` for what earlier rounds changed).'
+
+// SendMessage's `to`: a name or an agent id, with a " [ref]" a listing may have shown
+export function addressOf(to: unknown): string {
+  return typeof to === 'string' ? to.replace(/\s*\[[^\]]*\]\s*$/, '').trim() : ''
+}
+
 export function enterPhase(run: Run, phase: number, task: string, now: number): Run | string {
   if (!Number.isInteger(phase) || phase < 0 || phase >= PHASES.length) return `phase must be 0 to ${PHASES.length - 1}`
   if (phase >= 2 && closedForDev(run).length > 0) return devRefusal(run, `Phase ${phase}`)
   if (phase >= 6 && !qcHolds(run)) return prRefusal(run)
+  // development entered anew (the next task of a block) counts its rounds afresh; back from QC it does not
+  const isNewCycle = phase === 2 && run.phase !== 2 && run.phase !== 3
   return {
     ...run,
+    ...(isNewCycle ? { fixRounds: 0, roundSeq: run.seq, extraRounds: 0 } : {}),
     task: task !== '' ? task : run.task,
     phase,
     phaseAt: run.phaseAt.map((at, i) => (i === phase && at === 0 ? now : at)),

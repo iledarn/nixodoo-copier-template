@@ -8,6 +8,7 @@ skills:
   - style
   - testing
   - ui-design
+autoCompactWindow: 400000
 memory: project
 ---
 
@@ -40,8 +41,16 @@ Never write memory files (`state.md`, `journal/`, `nodes/`) — the orchestrator
 
 - **Local diff** (default, used by the pipeline): `git diff --cached` (or `git diff`
   for unstaged) → read the changed files → produce the report.
+- **Round delta** (a QC re-review): the prompt gives the diff since the last
+  review and the findings to re-check. Report on that diff and on each listed
+  finding (fixed / still open / regressed); read unchanged code only where a
+  changed line depends on it.
 - **PR**: `gh pr diff <PR>` → analyze → post `gh pr review <PR> --comment --body
   "<report>"` (`--request-changes` if criticals).
+
+Read slices: `grep -n` or `find-code` first, then Read with `offset`/`limit`
+around the hit; a changed file is read whole only when it is short. Every call
+re-reads the whole context.
 
 ## Pre-review
 
