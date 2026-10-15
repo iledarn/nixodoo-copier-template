@@ -38,10 +38,10 @@ Defined in `.claude/agents/`:
 
 | Agent | Purpose | Tools | Preloaded Skills |
 |-------|---------|-------|-----------------|
-| `dev` | Development — writes code | All | style, code-patterns |
-| `review` | QC + code review — read-only analysis | Read, Grep, Glob, Bash | style, testing |
+| `dev` | Development — writes code | Files, Bash, Skill, browser | style, code-patterns, ui-design |
+| `review` | QC + code review — read-only analysis | Read, Grep, Glob, Bash | style, testing, ui-design |
 | `verify` | Adversarial check of ONE Critical / Major review finding → CONFIRMED / PLAUSIBLE / REFUTED | Read, Grep, Glob, Bash | — |
-| `documenter` | Module docs — readme fragments, `readme/*.puml`, docstrings, manifest summary/description, PR description | All | style, find-code |
+| `documenter` | Module docs — readme fragments, `readme/*.puml`, docstrings, manifest summary/description, PR description | Files, Bash, Skill | style, find-code |
 
 Debugging is the **`debug` skill** (targeted test, {{ odoo_cmd }} shell script, logs), run in-context — not a subagent.
 
@@ -65,6 +65,31 @@ Maintain running lists across ALL phases:
 - `ALL_DECISIONS` — every DECISION returned, any phase
 
 These feed Phase 7 (Memory Closure). If a subagent forgets the closing block, ask it again — do not guess.
+
+## Agent economy
+
+Every call of an agent re-reads its whole context. The cache holds it for 5 minutes (`dev`: 1 hour);
+the first call after that writes the whole context again. What a run costs is how big each context
+grows and how long it lives:
+
+- **One spawn, one job.** Every round of work goes to a fresh agent with a brief. `SendMessage`
+  reaches an agent only while its job runs (an answer it waits for); a finished agent never gets
+  another round. With the pipeline-gates mod a fix round sent into an old `dev` agent is refused.
+- **Briefs inline, about 4k characters at most:** the task, the verified findings with their
+  decisive lines, what earlier rounds changed (`git -C <WT> diff --cached --stat <REVIEWED_TREE>`),
+  the constraints. Never hand an agent a scratchpad file to read.
+- **Verdicts first, then the brief.** A fix round starts once the `verify` agents answered, in one
+  brief, not as messages dripping into a working agent.
+- **Long runs are yours.** The whole module suite and tours run in Check 2, never inside an agent;
+  `dev` runs the test classes it touched.
+- **Quiet output.** A test log goes to a file and the context gets its summary lines; a diff comes
+  in as `--stat` unless the hunk is the point.
+- **One run per session.** A deploy or the next task starts in a new session: the ticket, kb and
+  the PR carry the state, and a session holding several runs re-reads all of them on every call.
+- **Subagents, not agent teams.** The phases are sequential and share one worktree and one
+  database. A teammate is a long-lived context by design, spawns only in an interactive CLI
+  session (the desktop app runs a named agent as a subagent), ignores the definition's `skills:`
+  and does not survive `/resume`.
 
 ---
 
@@ -141,7 +166,7 @@ needs from it:
 
 ## Pipeline Phases
 
-Execute **sequentially**. After each phase, check the result and decide whether to proceed or loop back. Use the **Agent tool** to spawn named subagents.
+Execute **sequentially**. After each phase, check the result and decide whether to proceed or loop back. Use the **Agent tool** to spawn the subagents by `subagent_type`.
 
 ### Gates as code (the pipeline-gates mod)
 
@@ -157,13 +182,16 @@ text:
   until `mcp__pipeline-gates__qc_verdict` recorded a pass, which it accepts only after a `review`
   agent and a green test run (more than 0 tests) since the last code change; a later code change
   voids it.
+- A fix round is `dev` work handed out after a `review` finished, in Phases 2–3. It goes to a fresh
+  `dev` agent (a `SendMessage` into an old one is refused), and a fourth round is refused until the
+  user grants three more.
 - A block of tasks is one run (one status, one grill alignment): start it with all the keys, or
   call `mcp__pipeline-gates__tasks` with `add` (`"KIO-1234 short title <its _url>"`, the `_url` the
   Odoo connector returns for the task: the pane gives it an open-in-Odoo link) before the first phase
   that names another task of the block. Mark each task `active` when you start on it and `done`
   when it is finished (in the PR, or closed without code; several may share one PR): the user
   follows the block's progress in the pipeline pane and band.
-- Only the user opens a gate or ends a run by hand: `/pipeline-gate open <{% if status_mcp == 'teams' %}status|{% endif %}grill|qc> <reason>`,
+- Only the user opens a gate or ends a run by hand: `/pipeline-gate open <{% if status_mcp == 'teams' %}status|{% endif %}grill|qc|rounds> <reason>`,
   `/pipeline-gate end`. Never ask for that to get past a refusal you can satisfy.
 
 ### Phase 0: Memory Bootstrap
@@ -478,9 +506,12 @@ Spawn the **`dev`** subagent:
 > Write the tests ALONGSIDE the code (project Rule 2 — every change ships
 > with tests): `TransactionCase` tagged `('post_install', '-at_install')`,
 > in the module's `tests/` dir, `tests/__init__.py` updated.
+> Run only the test classes you touch (your definition, "Token economy"); the
+> whole suite and the tours run in the QC gate.
 > When done, return the structured closing block (FILES_CHANGED / OPEN_THREADS / DECISIONS).
 
-The `dev` agent has style and code-patterns skills preloaded.
+The `dev` agent has style, code-patterns and ui-design preloaded. A slice of a big task is its own
+spawn; a slice never inherits the previous slice's agent.
 
 Wait for completion. Run `git -C <WT> diff --name-only` to confirm what changed. If the dev phase ADDED a new module dir, re-run `wt-start.sh <slug>` so the session farm picks it up before any test run. Append `FILES_CHANGED` → `ALL_FILES_CHANGED`, `OPEN_THREADS` → `ALL_OPEN_THREADS`, `DECISIONS` → `ALL_DECISIONS`.
 Report: "Development complete. Files changed: <list>"
@@ -489,9 +520,16 @@ Report: "Development complete. Files changed: <list>"
 
 ### Phase 3: QC Gate (review + validation, loops back to dev)
 
-The quality gate. Two checks run here; either one failing sends the code back to `dev`, then the gate re-runs. **Max 3 fix iterations.** This is the only quality gate — the code is reviewed here, before the PR, so the PR is clean and there is no post-PR review round.
+The quality gate. Two checks run here; either one failing sends the code back to `dev`, then the gate re-runs. **Max 3 fix rounds**: every `dev` round after a review counts, whatever it fixes. This is the only quality gate — the code is reviewed here, before the PR, so the PR is clean and there is no post-PR review round.
 
-**Check 1 — code review.** Spawn the **`review`** subagent (local-diff mode):
+Before each review, snapshot the tree it will see:
+`git -C <WT> add -A && git -C <WT> write-tree` → `<REVIEWED_TREE>`. The next round's delta is
+`git -C <WT> add -A && git -C <WT> diff --cached <REVIEWED_TREE>`.
+
+**Check 1 — code review.** Round 1 reviews the whole change. When it spans several modules or more
+than about 1,500 changed lines, split it by module over parallel `review` agents in ONE message,
+each with its own file list: small contexts cost less than one large one. Spawn the **`review`**
+subagent (local-diff mode):
 
 > <PROJECT_RULES_BLOB>
 >
@@ -514,6 +552,17 @@ The quality gate. Two checks run here; either one failing sends the code back to
 
 The `review` agent has `style` + `testing` preloaded. It is read-only.
 
+From round 2 the review gets the round delta, not the whole change again (round-delta mode):
+
+> <PROJECT_RULES_BLOB>
+>
+> Round-delta review in the worktree `<WT>`. The diff since the last review:
+> `git -C <WT> add -A && git -C <WT> diff --cached <REVIEWED_TREE>`. Re-check
+> these findings and say for each fixed / still open / regressed: <IDS + ONE
+> LINE EACH>. Report new issues in the delta with severity and confidence;
+> read unchanged code only where a changed line depends on it. Every CRITICAL /
+> MAJOR carries a failure scenario and one VERIFY line. Closing block as usual.
+
 **Check 1b — verification pass (Critical / Major only).** For every line of the
 review's `VERIFY:` block spawn one **`verify`** subagent — all in ONE message so
 they run in parallel (cap 6: verify Criticals first, carry the rest as
@@ -528,7 +577,7 @@ first-line verdicts:
 - **CONFIRMED** → keep; the verifier's decisive lines go into the `dev` fix prompt.
 
 Minor findings and Nits are not verified. A `verify` agent is read-only and
-returns no closing block.
+returns no closing block. The fix brief waits for every verdict.
 
 **Check 2 — validation.** Run directly (NOT via subagent) — you need Chrome browser tools and this session's running Odoo. Everything here targets THIS session (`<CONF>` / `<DB>` / `<URL>`), never another session.
 
@@ -545,8 +594,12 @@ returns no closing block.
 2. Update and run tests against this session:
    ```bash
    bash "${{ project_dir_var }}/.claude/skills/worktree-env/scripts/wt-test.sh" <slug> \
-       -u <MODULE_NAME> --test-enable --test-tags /<MODULE_NAME> 2>&1
+       -u <MODULE_NAME> --test-enable --test-tags /<MODULE_NAME> \
+       > "${{ project_dir_var }}/.worktrees/_env/<slug>/test.log" 2>&1; \
+     grep -E "odoo\.tests\.result|ERROR|CRITICAL|FAIL" "${{ project_dir_var }}/.worktrees/_env/<slug>/test.log"
    ```
+   On a failure, `grep -n -A40 -E "^(FAIL|ERROR):|Traceback"` the log; the whole log never
+   enters the context.
    `wt-test.sh` runs on a free port, so a browser tab left on `<URL>` by step 5
    of an earlier loop cannot send its requests into the tests' transaction; on
    the IPv4 loopback HttpCase talks to (the session listens on `::1`); and with
@@ -586,10 +639,18 @@ returns no closing block.
 
 - **BLOCKING** — any CONFIRMED or PLAUSIBLE CRITICAL review finding (a REFUTED
   one never blocks), OR a test/validation failure, OR a
-  failed test case: report to the user, spawn the `dev` agent to fix (inject
-  `<PROJECT_RULES_BLOB>` **and the "work in `<WT>`" instruction** at the start of
-  the fix prompt, append its returns to the running lists), post a `Bug Fix`
-  internal note, then **loop back and re-run this whole gate**. Max 3 fix iterations.
+  failed test case: report to the user, spawn a **fresh** `dev` agent to fix — never
+  `SendMessage` the previous one (Agent economy). Its brief: `<PROJECT_RULES_BLOB>`,
+  the "work in `<WT>`" instruction, the verified findings with their decisive lines,
+  and `git -C <WT> diff --cached --stat <REVIEWED_TREE>` as what earlier rounds
+  changed. Append its returns to the running lists, post a `Bug Fix` internal note,
+  then **loop back and re-run this whole gate**.
+- **STOP after 3 fix rounds** that still leave it blocking: report to the user what
+  still blocks, what keeps coming back, and the choice — narrow the design, split
+  the rest into a follow-up task, or more rounds. Recurring findings after three
+  rounds point at the design, not at the last fix. With the pipeline-gates mod a
+  fourth `dev` round is refused until the user types
+  `/pipeline-gate open rounds <reason>` (three more).
 - **NON-BLOCKING** — only MAJOR / MINOR / low-confidence review findings: report
   them, file MINOR or low-confidence items as OPEN_THREADS (post-MVP backlog)
   instead of fixing them now. Proceed.
@@ -893,7 +954,8 @@ append AFTER existing content.
    just a bug) → run a focused `grill` round first and update
    `CONTEXT.md`/ADRs per `domain-modeling`; a code change -> spawn `dev`,
    re-run the Phase 3 gate
-4. **Apply the change** via the `dev` agent
+4. **Apply the change** via a fresh `dev` agent with a brief; `SendMessage` only
+   reaches a `dev` whose job is still running
 {% if tickets_mcp == 'odoo' %}
 5. **Update checklist** in Odoo task if steps changed
 {% endif %}
@@ -904,7 +966,9 @@ append AFTER existing content.
 ## Error Handling
 
 - If a subagent fails, report the error and ask whether to retry or abort
-- Max 3 fix-and-retry loops in the Phase 3 gate
+- An agent cut off by a usage limit is not resumed after the reset (its cache is gone): a
+  fresh one gets a brief with where it stopped (`git -C <WT> status --short`, its last report)
+- Max 3 fix rounds in the Phase 3 gate, then stop and report (Phase 3, Gate decision)
 - Always restart this session's service (`odoo{{ service_suffix }}-wt@<slug>.service`) after validation;
   the user's `odoo{{ service_suffix }}.service` and other sessions are never stopped
 - On abort, do Phase 7 memory closure but **keep the worktree** — do NOT run

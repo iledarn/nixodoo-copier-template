@@ -9,7 +9,9 @@ import {
   ASK_NOT_YET,
   GATE_LABELS,
   PHASES,
+  RESUME_REFUSAL,
   addTasks,
+  addressOf,
   askedNote,
   blockLine,
   bump,
@@ -17,11 +19,13 @@ import {
   devRefusal,
   enterPhase,
   filePathOf,
+  grantRounds,
   grillQuestion,
   hasTask,
   isActive,
   isAwayGrillAnswer,
   isDocPath,
+  isNewRound,
   isOpen,
   isPrCreate,
   isWorktreeCode,
@@ -33,6 +37,10 @@ import {
   qcEvidence,
   qcHolds,
   recordVerdict,
+  roundsLeft,
+  roundsLine,
+  roundsRefusal,
+  startRound,
   taskCounts,
   taskKeyIn,
   taskKeysIn,
@@ -47,7 +55,7 @@ const RUNS_KEPT = 20
 const GATES: readonly GateName[] = ['status', 'grill', 'qc']
 // the person's own input: the prompt box, the desktop bridge, an SDK host; never a plugin or another agent
 const PERSON_ORIGINS = new Set(['composer', 'bridge', 'sdk'])
-const USAGE = 'usage: /pipeline-gate [status] | open <status|grill|qc> <reason> | start [TASK-KEY ...] | end'
+const USAGE = 'usage: /pipeline-gate [status] | open <status|grill|qc|rounds> <reason> | start [TASK-KEY ...] | end'
 const TASK_STATES: readonly TaskState[] = ['pending', 'active', 'done']
 
 const run = atom({ plugin: 'pipeline-gates', key: 'run' } as const, null)
@@ -60,6 +68,14 @@ async function agentType($: EngineInterface, agentId: string): Promise<string> {
     for (const agent of await $.agent.list()) agentTypes.set(agent.id, agent.type)
   }
   return agentTypes.get(agentId) ?? ''
+}
+
+// the type of the agent SendMessage addresses, by its id or its name
+async function addresseeType($: EngineInterface, to: unknown): Promise<string> {
+  const address = addressOf(to)
+  if (address === '') return ''
+  const agent = (await $.agent.list()).find(each => each.id === address || each.name === address)
+  return agent?.type ?? ''
 }
 
 async function save($: EngineInterface, next: Run | null): Promise<void> {
@@ -167,6 +183,7 @@ function describe(current: Run | null): string {
     }),
     `QC evidence since the last code change: review ${evidence.review ? 'yes' : 'no'}, green tests ${evidence.tests ? 'yes' : 'no'}${current.lastTests ? ` (last run: ${current.lastTests})` : ''}`,
     `dev allowed: ${closedForDev(current).length === 0 ? 'yes' : 'no'} · PR allowed: ${qcHolds(current) ? 'yes' : 'no'}`,
+    roundsLine(current),
   ].join('\n')
 }
 
@@ -191,6 +208,11 @@ async function runCommand($: EngineInterface, args: string, isPerson: boolean): 
   }
   if (verb === 'open') {
     if (!isActive(current)) return describe(current)
+    if (name === 'rounds' && rest.length > 0) {
+      const granted = grantRounds(current)
+      await save($, granted)
+      return `pipeline-gates: three more fix rounds (${rest.join(' ')}); ${roundsLine(granted)}.`
+    }
     if (!GATES.includes(name as GateName) || rest.length === 0) return USAGE
     await save($, openGate(current, name as GateName, `opened by you: ${rest.join(' ')}`, await $.clock.now()))
     return `pipeline-gates: the ${GATE_LABELS[name as GateName]} gate is open (${rest.join(' ')}).`
@@ -358,6 +380,22 @@ export const register: Register = on => {
           await save($, withBlock(latest, what, await $.clock.now()))
           $.ui.toast(`pipeline-gates: ${what} blocked`)
           return { deny: devRefusal(latest, what, answer === null || isOpen(latest.grill) ? '' : askedNote(answer)) }
+        }
+      }
+      // a fix round: a fresh dev agent, and no more than the rounds the person allows
+      if (isNewRound(current) && closedForDev(current).length === 0) {
+        if (tool === 'SendMessage' && (await addresseeType($, input.to)) === 'dev') {
+          await save($, withBlock(current, 'a fix round sent into an old dev agent', await $.clock.now()))
+          $.ui.toast('pipeline-gates: fix round into an old dev agent blocked')
+          return { deny: RESUME_REFUSAL }
+        }
+        if (isDev) {
+          if (roundsLeft(current) <= 0) {
+            await save($, withBlock(current, `fix round ${(current.fixRounds ?? 0) + 1}`, await $.clock.now()))
+            $.ui.toast('pipeline-gates: fix round blocked, the user decides')
+            return { deny: roundsRefusal(current) }
+          }
+          await change($, r => (isNewRound(r) ? startRound(r) : r))
         }
       }
       if (command !== '' && isPrCreate(command) && !qcHolds(current)) {
@@ -550,6 +588,7 @@ export const register: Register = on => {
               <Box flexDirection="column" paddingLeft={2}>
                 <Text dimColor>{`since the last code change: review ${evidence.review ? '✓' : '○'} · green tests ${evidence.tests ? '✓' : '○'}`}</Text>
                 {current.lastTests !== '' && <Text dimColor>{`last test run: ${current.lastTests}`}</Text>}
+                <Text dimColor>{roundsLine(current)}</Text>
               </Box>,
             )}
           </Box>,

@@ -2,9 +2,12 @@
 name: documenter
 description: "Odoo {{ odoo_version }} module documenter. Docs only — OCA readme fragments, PlantUML schemas in readme/, docstrings, manifest summary/description for changed modules, README.rst regeneration, PR description text. Use after code changes are final (post-QC gate) or when module docs are missing or stale."
 model: inherit
+# files, shell and skills: every other tool's schema would ride on every call
+tools: Read, Edit, Write, Bash, Grep, Glob, Skill
 skills:
   - style
   - find-code
+autoCompactWindow: 400000
 memory: project
 ---
 
@@ -100,6 +103,11 @@ Docs accrete lazily, module by module — there is no mass backfill:
 - **Document from code, never invent.** Every claim must be backed by something
   you read in the module (the `find-code` skill maps models/fields without
   a running server). Uncertain → read more or leave it out.
+- **Read in slices.** `find-code` or `grep -n` first, then Read with
+  `offset`/`limit` around the hit; a whole-file Read only for a short file.
+  Grep generated files (`README.rst`, `index.html`) and long `.puml`, never
+  read them whole: every call re-reads the whole context. Edit, not a
+  `python3` heredoc patch.
 - **Short beats complete.** A fragment nobody has to scroll gets read; cut
   filler and marketing tone.
 - Scope = the modules changed in this run (plus a module whose docs the change

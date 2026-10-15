@@ -2,12 +2,16 @@
 name: dev
 description: "Expert Odoo {{ odoo_version }} developer. Use proactively when developing, customizing, or troubleshooting Odoo modules. Writes complete, production-ready code following {{ project_name }} conventions."
 model: inherit
+# files, shell, skills and a browser for the phone check: every other tool's schema would ride on every call
+tools: Read, Edit, Write, Bash, Grep, Glob, Skill, ToolSearch, mcp__Claude_Browser, mcp__claude-in-chrome
 skills:
   - style
   - code-patterns
   - ui-design
-mcpServers:
-  - odoo
+autoCompactWindow: 400000
+# a test run or a permission prompt can outlast 5 minutes; past that a 5m cache rewrites the whole context
+experimental:
+  cacheTtl: 1h
 memory: project
 ---
 
@@ -84,6 +88,25 @@ tests, security (ACL/record rules), and error handling are never on it.
 - Every new model needs security files (ACL + record rules).
 - When modifying existing modules, check `__manifest__.py` dependencies and data file order.
 - Reference line numbers and file paths when discussing existing code.
+
+## Token economy
+
+Every call re-reads the whole context, so whatever enters it is paid again on every later call.
+
+- Locate, then read the slice: `find-code` (`lsp.py def|refs|who`) or `grep -n`, then Read with
+  `offset`/`limit` around the hit. Read a whole file only when it is short or you rewrite it
+  throughout. Never `cat` a file through Bash; grep a log, a generated file or a scratchpad dump.
+- Change files with Edit, not a `python3 - <<EOF` patch: the patch script stays in the transcript.
+- Run only the test classes you touched, log to a file, print the summary:
+{% if dev_in_worktrees %}
+  `bash ${{ project_dir_var }}/.claude/skills/worktree-env/scripts/wt-test.sh <slug> -u <module> --test-enable --test-tags /<module>:<TestClass> > ${{ project_dir_var }}/.worktrees/_env/<slug>/test.log 2>&1; grep -E "odoo\.tests\.result|ERROR|CRITICAL|FAIL" ${{ project_dir_var }}/.worktrees/_env/<slug>/test.log`
+{% else %}
+  `{{ odoo_cmd }} -c ${{ project_dir_var }}/odoo.conf -u <module> --test-enable --test-tags /<module>:<TestClass> --workers 0 --stop-after-init > /tmp/<module>-test.log 2>&1; grep -E "odoo\.tests\.result|ERROR|CRITICAL|FAIL" /tmp/<module>-test.log`
+{% endif %}
+  On a failure, `grep -n -A40 -E "^(FAIL|ERROR):|Traceback"` the log. The whole module suite and
+  tours belong to the QC gate: name them in `DECISIONS` rather than wait minutes on them.
+- One task per spawn. A new round of review findings comes to a fresh agent with a brief; finish
+  with the closing block, do not wait for more work.
 
 ## Before saying a task is done
 

@@ -30,6 +30,11 @@ export type Run = {
   // the grill dialog was declined or went unanswered: it asks again only after the person's next message
   // (absent in a run stored before the dialog existed)
   isAskMuted?: boolean
+  // fix rounds: dev work handed out after a review, the seq the last one began at, and the rounds the
+  // person granted beyond the first three (absent in a run stored before rounds were counted)
+  fixRounds?: number
+  roundSeq?: number
+  extraRounds?: number
   isDone: boolean
 }
 
