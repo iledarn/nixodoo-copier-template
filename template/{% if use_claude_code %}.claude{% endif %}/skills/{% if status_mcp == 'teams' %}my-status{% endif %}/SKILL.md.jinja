@@ -1,7 +1,8 @@
+{% set identity = 'record' if use_kb else 'node' %}
 ---
 name: my-status
-description: "My work status from PRODUCTION Odoo. list (default): open tasks. send: post today's plan to the Teams chat from the user_identity node (only tasks planned to close today, each with estimate + link; backlog shown to you for swaps, never posted). rebalance: when a new task enters scope, re-estimate and shift the date_deadline of your other open assigned tasks to absorb it — the ONLY mode that writes (date_deadline/estimate on your own tasks only). Use when the user asks 'what are my tasks', 'my open tasks', 'send my status to the team', or when scope grows and deadlines need rebalancing."
-argument-hint: "[send] [user login — default from user_identity node]"
+description: "My work status from PRODUCTION Odoo. list (default): open tasks. send: post today's plan to the Teams chat from the user_identity {{ identity }} (only tasks planned to close today, each with estimate + link; backlog shown to you for swaps, never posted). rebalance: when a new task enters scope, re-estimate and shift the date_deadline of your other open assigned tasks to absorb it — the ONLY mode that writes (date_deadline/estimate on your own tasks only). Use when the user asks 'what are my tasks', 'my open tasks', 'send my status to the team', or when scope grows and deadlines need rebalancing."
+argument-hint: "[send] [user login — default from user_identity {{ identity }}]"
 ---
 
 # My status
@@ -23,11 +24,12 @@ Three modes:
 
 ## Identity — read first
 
-Read memory node `nodes/user_identity.md` (memory dir → see MEMORY.md): full
+{% if use_kb %}Read the kb record `user_identity` (`kb show user_identity`): full{% else %}Read memory node `nodes/user_identity.md` (memory dir → see MEMORY.md): full{% endif %}
+
 name, Odoo login, default project id, "Current ticket" stage, Teams status
 chatId, required Teams auth. **Never hardcode a person** — the skill must work
-for any teammate with their own identity node. An explicit login argument
-overrides the node (list mode only).
+for any teammate with their own identity {{ identity }}. An explicit login argument
+overrides the {{ identity }} (list mode only).
 
 {% if tickets_mcp == 'odoo' %}
 ## Fixed plumbing
@@ -101,14 +103,14 @@ overrides the node (list mode only).
    `<p><strong>Planned for today:</strong> nothing planned</p>`. Keep it tight
    (≤ ~12 lines). Braces mark a placeholder; HTML-escape `<` and `&` in task
    names.
-7. Check `mcp__claude_ai_Microsoft_365__get_me` matches the identity node's
+7. Check `mcp__claude_ai_Microsoft_365__get_me` matches the identity {{ identity }}'s
    "Teams account must be"; on a mismatch or an auth error the Microsoft 365
    connector needs reconnecting in claude.ai under Customize → Connectors —
    stop and tell the user
    (`teams-message` skill, Send step 1). Send via
    `mcp__claude_ai_Microsoft_365__teams_send_chat_message` to the identity
-   node's status chatId, `bodyType: "html"`. ChatId errors → re-resolve by topic via
-   `mcp__claude_ai_Microsoft_365__teams_list_chats`, update the identity node.
+   {{ identity }}'s status chatId, `bodyType: "html"`. ChatId errors → re-resolve by topic via
+   `mcp__claude_ai_Microsoft_365__teams_list_chats`, update the identity {{ identity }}{% if use_kb %} (`kb edit user_identity`){% endif %}.
 8. Report the message id.
 
 ## Steps — rebalance mode
@@ -172,43 +174,54 @@ guard (step 8).
   `date_deadline` / `planned_hours` / `tshirt_estimate` on the user's **own**
   open assigned tasks, via `execute` with the quiet + `tracking_disable`
   context. Nothing else here writes.
+{% if not use_kb %}
   (Ticket mirroring on state-item open/close is a separate flow — see the
   behavior protocol's "State ↔ Odoo tickets" section.)
+{% endif %}
 - Teams: **always English** (regardless of conversation language); exactly one
-  message per explicit go, to the identity node's chat only. Shaping and sending
+  message per explicit go, to the identity {{ identity }}'s chat only. Shaping and sending
   follow the `teams-message` skill (`bodyType: "html"`, named links, read-back
   check).
 
 {% else %}
 ## Fixed plumbing (no ticket tracker)
 
+{% if use_kb %}
+- **Data source:** kb — the open tasks of `kb next --scope {{ project_name }}` (it writes
+  nothing) plus what this session knows; confirm with the user.
+{% else %}
 - **Data source:** memory — `state.md` (`## WIP`, `## Ready for review`,
   `## Open threads`) plus what this session knows; confirm with the user.
+{% endif %}
 - Items are plain text — no ticket keys, no links.
 
 ## Steps — list mode
 
+{% if use_kb %}
+1. Run `kb next --scope {{ project_name }}`; show the open tasks by urgency level.
+{% else %}
 1. Read `state.md` from the memory dir (path in MEMORY.md); show open items
    grouped by section.
+{% endif %}
 
 ## Steps — send mode
 
-1. Build today's plan from `state.md` WIP items + the user's input; estimate
+1. Build today's plan from {% if use_kb %}the `kb next` tasks{% else %}`state.md` WIP items{% endif %} + the user's input; estimate
    each (~6 focused h/day budget). Thin evidence → "low confidence".
 2. Show the draft plan + the remaining items; loop swaps until an explicit go.
 3. Build the Teams message (HTML, **always English**) — same format as the
    tracked variant, one `<li>` per planned item with estimate, no links.
-4. Check `mcp__claude_ai_Microsoft_365__get_me` matches the identity node's
+4. Check `mcp__claude_ai_Microsoft_365__get_me` matches the identity {{ identity }}'s
    "Teams account must be"; on a mismatch or an auth error the Microsoft 365
    connector needs reconnecting in claude.ai under Customize → Connectors —
    stop and tell the user
    (`teams-message` skill, Send step 1). Send via
    `mcp__claude_ai_Microsoft_365__teams_send_chat_message` to the identity
-   node's status chatId, `bodyType: "html"`. Report the message id.
+   {{ identity }}'s status chatId, `bodyType: "html"`. Report the message id.
 
 ## Write rules
 
 - Teams: **always English**; exactly one message per explicit go, to the
-  identity node's chat only; shaping and sending per the `teams-message` skill.
+  identity {{ identity }}'s chat only; shaping and sending per the `teams-message` skill.
   (`rebalance` mode is N/A without a ticket tracker.)
 {% endif %}
