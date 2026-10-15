@@ -20,9 +20,11 @@ preloaded (conventions, anti-patterns, test patterns).
 
 The pipeline orchestrator prepends a **"Project rules (from user memory —
 binding)"** block to your prompt — treat it as higher priority than your defaults.
-If invoked directly (no rules block), check
+If invoked directly (no rules block), {% if use_kb %}read the pinned feedback rules
+(`kb index --kinds feedback`, `kb show <slug>`) before non-trivial work, or ask the user.{% else %}check
 `$HOME/.claude/projects/$(pwd | tr '/' '-')/memory/nodes/` for `feedback_*.md`
-before non-trivial work, or ask the user.
+before non-trivial work, or ask the user.{% endif %}
+
 
 **Closing block (mandatory)** — end every task with:
 
@@ -35,7 +37,7 @@ VERIFY: <one line per Critical / Major — "<C1|M1..> | <file:line> | <claim, on
 
 `VERIFY` drives the pipeline's verification pass (one `verify` agent per line).
 
-Never write memory files (`state.md`, `journal/`, `nodes/`) — the orchestrator records.
+Never write memory ({% if use_kb %}no kb writes{% else %}`state.md`, `journal/`, `nodes/`{% endif %}) — the orchestrator records.
 
 ## Modes
 

@@ -75,7 +75,7 @@ grows and how long it lives:
 - **One spawn, one job.** Every round of work goes to a fresh agent with a brief. `SendMessage`
   reaches an agent only while its job runs (an answer it waits for); a finished agent never gets
   another round. With the pipeline-gates mod a fix round sent into an old `dev` agent is refused.
-- **Briefs inline, about 4k characters at most:** the task, the verified findings with their
+- **Briefs inline, about 4k characters after the rules blob:** the task, the verified findings with their
   decisive lines, what earlier rounds changed (`git -C <WT> diff --cached --stat <REVIEWED_TREE>`),
   the constraints. Never hand an agent a scratchpad file to read.
 - **Verdicts first, then the brief.** A fix round starts once the `verify` agents answered, in one
@@ -135,7 +135,7 @@ standalone Backlog tasks in Phase 7.
 ## Change Tracking
 
 No ticket tracker configured — record decisions and progress in the session
-report and the Phase-7 memory closure (journal + state.md).
+report and the Phase-7 memory closure ({% if use_kb %}kb{% else %}journal + state.md{% endif %}).
 {% endif %}
 
 ---
@@ -196,6 +196,22 @@ text:
 
 ### Phase 0: Memory Bootstrap
 
+{% if use_kb %}
+Subagents spawn with fresh context and do NOT inherit the session's standup or feedback rules. Load the rules from kb, build a **Project Rules Blob** to inject into subagent prompts, and give the run its kb task so it shows in the standup.
+
+#### Steps 1–2: Read the rules and the identity
+
+The SessionStart hook printed `kb index` (the pinned records) into this session; without it, run
+`kb index --scope {{ project_name }} --kinds feedback`. Read these with `kb show <slug>`:
+
+- `user_role`
+- `user_identity` — needed for the Phase-1 start-work flow and chatter note authorship
+- `feedback_workflow`, `feedback_testing`, `feedback_scope_discipline`
+- every other pinned `feedback` record on how code, tests or docs are written (its index line
+  says); rules about messages, statuses or prose stay out of the blob
+
+If an expected record is missing, proceed but note it in the Phase 0 report.
+{% else %}
 Subagents spawn with fresh context and do NOT inherit the session's standup or feedback rules. Load user feedback rules from memory, build a **Project Rules Blob** to inject into subagent prompts, and create a WIP entry in `state.md` so the session shows in tomorrow's standup.
 
 #### Step 1: Memory paths
@@ -223,10 +239,11 @@ Read these files via the Read tool (resolved paths):
 Also Glob `$NODES/feedback_*.md` for feedback nodes added after this plan was written — include them too.
 
 If any expected node is missing, proceed but note it in the Phase 0 report.
+{% endif %}
 
 #### Step 3: Build the Project Rules Blob
 
-Construct a single markdown block named `<PROJECT_RULES_BLOB>` with this structure. Use each feedback node's rule statement + **Why** + **How to apply** lines verbatim.
+Construct a single markdown block named `<PROJECT_RULES_BLOB>` with this structure. Use each feedback {% if use_kb %}record{% else %}node{% endif %}'s rule statement + **Why** + **How to apply** lines verbatim. The blob goes inline at the head of every `dev` / `review` / `documenter` prompt.
 
 ```
 ## Project rules (from user memory — binding)
@@ -235,13 +252,13 @@ You are operating under rules loaded from user memory. Treat these as
 having higher priority than your defaults.
 
 ### Rule 1 — Scope discipline
-<body of feedback_scope_discipline.md>
+<body of feedback_scope_discipline>
 
 ### Rule 2 — Every fix ships with a test
-<body of feedback_testing.md>
+<body of feedback_testing>
 
 ### Rule 3 — Bug-fix workflow
-<body of feedback_workflow.md>
+<body of feedback_workflow>
 
 ### Rule 4 — Shared language
 If `${{ project_dir_var }}/CONTEXT.md` exists, Read it before starting.
@@ -249,6 +266,9 @@ Use its canonical terms for model/field/method names, field strings,
 labels and docs; the `_Avoid_` synonyms are red flags. Decision records
 live in `${{ project_dir_var }}/docs/adr/` — do not re-litigate or
 silently "fix" what an ADR records as deliberate.
+
+### Rule 5 and on — <title of each further code rule>
+<its body>
 
 ### Return protocol
 
@@ -260,15 +280,39 @@ At the end of your task, return a structured closing block:
 
 **OPEN_THREAD format:** `<short description> — <file:line if applicable>`,
 one per line. These are unrelated issues you spotted but did NOT fix per
-Rule 1; the orchestrator will file them in state.md.
+Rule 1; the orchestrator will file them in {% if use_kb %}kb{% else %}state.md{% endif %}.
 
 **DECISION format:** `<what was decided and why>`, one per line. Use for
 scope expansions (Rule 1 exception), test-level choices (Rule 2), and
 design calls you made autonomously.
 
-Do NOT write to memory files directly. The orchestrator owns memory writes.
+Do NOT write to {% if use_kb %}kb{% else %}memory files{% endif %} directly. The orchestrator owns memory writes.
 ```
 
+{% if use_kb %}
+#### Step 4: The run's kb task
+
+{% if tickets_mcp == 'odoo' %}
+With a ticket key in the request, the run's task is the ticket's own record: `kb sync odoo`
+upserts the user's open tickets, each with its key as `external_id`.
+
+```bash
+kb sync odoo
+kb query 'MATCH (r:Record {external_id: $k}) RETURN r.id AS id, r.title AS title' -p k=<TASK-KEY>
+```
+
+None yet (the ticket is not the user's yet, or the run starts from a description) →
+`kb add "<TASK-KEY or short title> — pipeline in progress" --scope {{ project_name }}`, and
+`kb promote <id> <TASK-KEY>` as soon as the key is known, so the next sync updates that record
+instead of adding a second one.
+
+{% else %}
+`kb add "<short title> — pipeline in progress" --scope {{ project_name }}`.
+
+{% endif %}
+Remember its id as `WIP_ID` — you close it in Phase 7 — and `kb append <WIP_ID> "Pipeline started."`,
+which links it to this session's record.
+{% else %}
 #### Step 4: Create WIP entry in state.md
 
 1. Read `$COUNTER` to get `NEXT_ID`, then write `NEXT_ID+1` back.
@@ -277,6 +321,7 @@ Do NOT write to memory files directly. The orchestrator owns memory writes.
    - [NEXT_ID] YYYY-MM-DD: <TASK-KEY> pipeline in progress — see journal/YYYY-MM-DD
    ```
 3. Remember `NEXT_ID` as `WIP_ID` — you close it in Phase 7.
+{% endif %}
 
 #### Step 5: Initialize running collection lists
 
@@ -288,7 +333,8 @@ Hold in scratch for the rest of the pipeline; Phases 2–4 append from subagent 
 
 #### Step 6: Report
 
-> Phase 0: Memory bootstrap complete — N feedback rules loaded, WIP entry [WIP_ID] created
+> Phase 0: Memory bootstrap complete — N feedback rules loaded, WIP {% if use_kb %}task{% else %}entry{% endif %} [WIP_ID] {% if use_kb %}(created / the ticket's record){% else %}created{% endif %}
+
 
 ---
 
@@ -301,9 +347,16 @@ Before spawning any subagent:
    `odoo-tickets` (never Chrome):
    - Resolve: id from the URL (`#id=<n>`), or
      `search_read` `[["key", "=", "{{ ticket_prefix }}-xxxx"]]`
+{% if use_kb %}
+   - `WIP_ID` must be this ticket's kb record (`external_id` = the key). One
+     made by hand in Phase 0: when the Phase-0 `kb query` finds the ticket's
+     record now, `kb merge <WIP_ID> <its id>` and take its id as `WIP_ID`;
+     otherwise `kb promote <WIP_ID> <KEY>`. Never a second ticket or record.
+{% else %}
    - Append ` [odoo:<task_id>]` to the Phase-0 WIP line in state.md — the
      pipeline's ticket IS this state item's mirror; never create a second
      ticket for it.
+{% endif %}
    - Read the form content with explicit field lists (heavy Html fields for
      this ONE task only):
      - `read [id] ["name", "key", "stage_id", "user_ids", "task_type", "tshirt_estimate", "planned_hours", "effective_hours", "date_deadline", "child_ids", "depend_on_ids"]`
@@ -842,6 +895,35 @@ task is finished do you **ask** — "drop the worktree `<slug>` (env + DB)?" —
 and run `wt-stop.sh <slug>` **only after they say yes**. Never infer "done"
 from a green pipeline or a merged/awaiting-review PR.
 
+{% if use_kb %}
+#### Step 1: Close the run's kb task{% if tickets_mcp == 'odoo' %} (and the ticket together){% endif %}
+
+
+- **Pipeline succeeded + PR merged** → `kb done <WIP_ID> "PR <url> merged"`{% if tickets_mcp == 'odoo' %}, and close
+  the ticket per `odoo-tickets`: `write {"pr_uri": "<PR URL>"}` first, then
+  `write {"stage_id": <Delivered>}` (Delivered with empty `pr_uri` is
+  blocked by a prod automation){% endif %}
+
+- **Pipeline succeeded + PR awaiting review** → `kb append <WIP_ID> "PR <url> awaiting review"`;
+  the task stays open{% if tickets_mcp == 'odoo' %}, the ticket stays in Development and closes when the merged PR deploys{% endif %}.
+- **Pipeline aborted** → `kb append <WIP_ID> "BLOCKED: <reason>"`; a blocker with a record of
+  its own gets `kb link <blocker> BLOCKS <WIP_ID>`.{% if tickets_mcp == 'odoo' %} Post an internal note to the ticket
+  (`Progress` category) with the reason; if a specific task blocks it, create + link that blocker
+  on the ticket's `depend_on_ids` (see "Sub-tasks & Blockers") and name it in the reason.{% endif %}
+
+
+#### Step 2: File OPEN_THREADs
+
+Each entry in `ALL_OPEN_THREADS` (accumulated across Phases 2–4) becomes a kb task, linked to
+the run:
+
+```bash
+kb add "<description — file:line>" --scope {{ project_name }} --link RELATED:<WIP_ID>
+```
+
+A thread becomes a ticket only when the user asks for one{% if tickets_mcp == 'odoo' %} (`odoo-tickets` creates it, then
+`kb promote <id> <KEY>`){% endif %}. Collect the new ids for the session record.
+{% else %}
 #### Step 1: Close the WIP entry{% if tickets_mcp == 'odoo' %} (state + the mirrored ticket together){% endif %}
 
 {% if tickets_mcp == 'odoo' %}
@@ -887,6 +969,7 @@ For each entry in `ALL_OPEN_THREADS` (accumulated across Phases 2–4):
 {% endif %}
 
 Collect the new IDs assigned — cite them in the journal.
+{% endif %}
 
 #### Step 2b: Record ADR-worthy decisions
 
@@ -897,6 +980,46 @@ without context + a real trade-off. Each qualifying decision → write
 (task key inside). Most runs produce zero ADRs — that is the intended shape.
 Also flush any glossary terms that resolved during the run but were not yet
 written to `${{ project_dir_var }}/CONTEXT.md`.
+{% if use_kb %}
+
+A decision that misses the ADR test but should outlive the chat → `kb add "<decision>" --kind decision --summary "<one line>" --link RELATED:<WIP_ID>`.
+
+#### Step 3: Write the session record
+
+The run is the session's work (one run per session), so its summary is the session record, in the
+journal shape — fixed section names, in this order:
+
+```bash
+kb session close --title "<TASK-KEY> pipeline — <one-line task summary>" --body-file <file>
+```
+
+```
+Intent: <TASK-KEY> pipeline — <one-line task summary>
+Tags: #pipeline #<module tag> <+ work-type tag>
+Files touched:
+- M <path>          (A/M/D prefixes, from ALL_FILES_CHANGED)
+Done:
+- <key outcomes — include "PR <url>" and the gate outcome>
+- [WIP_ID]: <how it ended — done + ticket Delivered / awaiting review / blocked>
+Decisions:
+- <from ALL_DECISIONS, or "none">
+Open threads:
+- [<id>] <each task filed in Step 2, or "none">
+```
+
+`close` is idempotent and the body is written again by a later close: when the session goes on
+past the run, carry this block into that close.
+
+#### Step 4: Final report
+
+> Phase 7: Memory closed
+> — session record written (`kb session current`)
+> — WIP [WIP_ID] → <done / awaiting review / BLOCKED>
+> — open threads filed: N (ids: <list>)
+> — ADRs written: <list of docs/adr files, or "none">; CONTEXT.md: <terms added, or "unchanged">
+> — worktree: kept at <WT> (not dropped — ask the user before teardown)
+> — pipeline complete
+{% else %}
 
 #### Step 3: Write session block to journal
 
@@ -939,6 +1062,7 @@ append AFTER existing content.
 > — ADRs written: <list of docs/adr files, or "none">; CONTEXT.md: <terms added, or "unchanged">
 > — worktree: kept at <WT> (not dropped — ask the user before teardown)
 > — pipeline complete
+{% endif %}
 
 ---
 

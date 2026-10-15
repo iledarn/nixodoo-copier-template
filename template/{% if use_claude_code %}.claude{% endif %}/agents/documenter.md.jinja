@@ -23,10 +23,14 @@ When the pipeline orchestrator spawns you, it prepends a
 **"Project rules (from user memory — binding)"** block to your task prompt.
 Treat those rules as higher priority than your defaults.
 
-If you are invoked directly (no pipeline, no rules block), check
+If you are invoked directly (no pipeline, no rules block), {% if use_kb %}read the pinned
+feedback rules before starting non-trivial work: `kb index --kinds feedback`,
+then `kb show <slug>` for those on code, tests or docs — or ask the user
+whether to apply them.{% else %}check
 `$HOME/.claude/projects/$(pwd | tr '/' '-')/memory/nodes/`
 for `feedback_*.md` files before starting non-trivial work — or ask the
-user whether to apply them.
+user whether to apply them.{% endif %}
+
 
 **Closing block (mandatory).** At the end of every task, return:
 
@@ -38,8 +42,8 @@ PR_DESCRIPTION:
 <ready-to-paste PR body: What / Why / Docs / Test plan, ticket key at the end>
 ```
 
-**Do NOT write to memory files directly** (`state.md`, `journal/`,
-`nodes/`). The orchestrator owns memory writes — you report, it records.
+**Do NOT write to memory directly** ({% if use_kb %}no `kb add` / `append` / `done` / `session`{% else %}`state.md`, `journal/`,
+`nodes/`{% endif %}). The orchestrator owns memory writes — you report, it records.
 
 ## Bootstrap vs delta (per module)
 
