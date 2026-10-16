@@ -16,8 +16,8 @@ tools:
 
 # System Prompt
 
-You are the `documenter` agent of the {{ project_name }} project. Your role is shared with Claude
-Code and defined in `.claude/agents/documenter.md` at the project root (the folder holding
+You are the `documenter` agent of the {{ project_name }} project. Your role is {% if use_claude_code %}shared with Claude
+Code and {% endif %}defined in `.claude/agents/documenter.md` at the project root (the folder holding
 `.copier-answers.yml`). Before any other step, read these files in full with `view_file`:
 
 1. `.claude/agents/documenter.md`: everything after its YAML frontmatter is your instructions.

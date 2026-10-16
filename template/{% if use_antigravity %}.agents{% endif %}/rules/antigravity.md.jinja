@@ -1,14 +1,21 @@
 ---
 trigger: always_on
-description: How to follow this project's Claude Code setup from Antigravity - tool names, what is missing here, memory, safety, working beside a Claude Code session.
+description: How to follow this project's Claude Code setup from Antigravity - tool names, what is missing here, memory, safety{% if use_claude_code %}, working beside a Claude Code session{% endif %}.
 ---
 
 # Working here from Antigravity
 
+{% if use_claude_code %}
 This project is set up for Claude Code and Antigravity at the same time. `CLAUDE.md`,
 `.claude/skills/` and `.claude/agents/` are the one source of instructions for both; `.agents/`
 only adapts them. Never edit `.claude/` to suit Antigravity: those files come from the copier
 template (`.copier-answers.yml`) and a Claude Code session reads them too.
+{% else %}
+This project's instructions are written in Claude Code's layout: `CLAUDE.md`, `.claude/skills/`,
+`.claude/agents/` and `.claude/hooks/` are their one source, and `.agents/` only adapts them for
+Antigravity. Change them there, not here: they come from the copier template
+(`.copier-answers.yml`).
+{% endif %}
 
 ## Reading Claude-flavoured instructions
 
@@ -75,7 +82,7 @@ Skills and agents name Claude Code tools. Use the Antigravity equivalent:
 
 `CLAUDE.md` ("Memory: kb") is how kb works; here the SessionStart hook also names this
 conversation's kb session id. Pass `--id <that id>` to every `kb session note` and
-`kb session close`: a Claude Code session may be open at the same time, and without `--id` kb picks
+`kb session close`: {% if use_claude_code %}a Claude Code session{% else %}another conversation{% endif %} may be open at the same time, and without `--id` kb picks
 the newest. Put `antigravity` in the close's Tags.
 {% endif %}
 
@@ -85,18 +92,20 @@ the newest. Put `antigravity` in the close's Tags.
 `.agents/hooks.json` runs the Claude Code hooks from `.claude/hooks/` through
 `.agents/hooks/claude_hook.py`, plus `entire` (`entire hooks antigravity ...` for the root repo and
 {% if custom_repo_name %}
-`.agents/hooks/entire-fanout.sh` for nested repos like `src/{{ custom_repo_name }}`). `redact-secrets` in
+`.agents/hooks/entire-fanout.sh` for nested repos like `src/{{ custom_repo_name }}`).{% if use_claude_code %} `redact-secrets` in{% endif +%}
 {% else %}
-`.agents/hooks/entire-fanout.sh` for nested repos under `src/`). `redact-secrets` in
+`.agents/hooks/entire-fanout.sh` for nested repos under `src/`).{% if use_claude_code %} `redact-secrets` in{% endif +%}
 {% endif %}
 {% else %}
 ## Hooks
 
 `.agents/hooks.json` runs the Claude Code hooks from `.claude/hooks/` through
-`.agents/hooks/claude_hook.py`. `redact-secrets` in
+`.agents/hooks/claude_hook.py`.{% if use_claude_code %} `redact-secrets` in{% endif +%}
 {% endif %}
+{% if use_claude_code %}
 `.agents/hooks/redact.ts` is kept disabled in `hooks.json` until Antigravity's `jsonhook` stops
 stripping `result` from `PostToolUse` payloads.
+{% endif %}
 
 - A denial from `guard-bash` or `guard-readonly` is final: run nothing that routes around it.
 {% if custom_repo_name %}
@@ -114,7 +123,9 @@ stripping `result` from `PostToolUse` payloads.
 {% if use_entire %}
 - `.entire/metadata/` is read-denied everywhere: it holds session transcripts.
 {% endif %}
+{% if use_claude_code %}
 - `«redacted»` in a tool result is a masked secret. Do not try to recover the value.
+{% endif %}
 - **Terminal sandbox**: Antigravity's default command sandbox does not mount `/nix`,
   `~/.local/bin`, or `/run/user/$UID/bus`, and blocks network/loopback sockets. Either disable the
   terminal sandbox in Antigravity settings (`enableTerminalSandbox: false`), or use
@@ -133,11 +144,11 @@ stripping `result` from `PostToolUse` payloads.
   remote `rm -rf`, and any production change nobody asked for in this conversation.
 {% endif %}
 {% if custom_repo_name %}
-- A Claude Code session may be working in this checkout right now. Do not switch branches, stash,
+- {% if use_claude_code %}A Claude Code session{% else %}Another agent session{% endif %} may be working in this checkout right now. Do not switch branches, stash,
   reset or check out files in the project root or in `src/{{ custom_repo_name }}`; do task work in a
   worktree env (`worktree-env` skill). Stop and ask when files you did not touch change under you.
 {% else %}
-- A Claude Code session may be working in this checkout right now. Do not switch branches, stash,
+- {% if use_claude_code %}A Claude Code session{% else %}Another agent session{% endif %} may be working in this checkout right now. Do not switch branches, stash,
   reset or check out files in the project root. Stop and ask when files you did not touch change
   under you.
 {% endif %}

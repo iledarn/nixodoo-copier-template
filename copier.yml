@@ -108,7 +108,7 @@ db_password:
 
 editor:
   type: str
-  help: Editor configuration to generate (vscode = .vscode settings; odools.toml is always shipped with use_claude_code — the find-code skill's LSP client needs it)
+  help: Editor configuration to generate (vscode = .vscode settings; odools.toml is always shipped with the agent layer — the find-code skill's LSP client needs it)
   default: none
   choices:
     - none
@@ -139,27 +139,40 @@ custom_repo_name:
 
 use_claude_code:
   type: bool
-  help: Include Claude Code integration (CLAUDE.md, guard hooks, Odoo dev skills, agents, MCP config)?
+  help: Work in this project with Claude Code? Generates CLAUDE.md and .claude/ (guard hooks, Odoo dev skills, agents) plus the Claude Code-only parts (mods, markdown memory seed)
   default: true
+
+use_antigravity:
+  type: bool
+  help: Work in this project with Google Antigravity? Generates .agents/, which points Antigravity at CLAUDE.md and .claude/ (generated for it too), so both agents work from one set of instructions. Pick either, both or neither
+  default: false
+
+# The shared instruction layer: CLAUDE.md, .claude/ (skills, agents, hooks and the
+# settings.json that wires them) and odools.toml. Generated for either agent, since
+# Antigravity's .agents/ reads it rather than keeping a copy of its own.
+use_agent_layer:
+  type: bool
+  when: false
+  default: "{{ use_claude_code or use_antigravity }}"
 
 module_prefix:
   type: str
   help: Technical prefix of your custom modules (used across the Claude skills and examples)
   default: "{% if project_name.split('-')[0] in ['odoo', 'base', 'web'] %}custom{% else %}{{ project_name.split('-')[0] }}{% endif %}"
   validator: "{% if not (module_prefix | regex_search('^[a-z][a-z0-9_]+$')) %}Use lowercase snake_case{% endif %}"
-  when: "{{ use_claude_code }}"
+  when: "{{ use_agent_layer }}"
 
 ticket_prefix:
   type: str
   help: Ticket key prefix used in commit/PR conventions (e.g. PROJ for PROJ-123)
   default: "TASK"
-  when: "{{ use_claude_code }}"
+  when: "{{ use_agent_layer }}"
 
 readme_gen_source:
   type: str
   help: pip source of OCA maintainer-tools (oca-gen-addon-readme, used by the documenter agent; point at your own fork/ref for supply-chain control)
   default: "git+https://github.com/OCA/maintainer-tools@master"
-  when: "{{ use_claude_code }}"
+  when: "{{ use_agent_layer }}"
 
 status_mcp:
   type: str
@@ -168,7 +181,7 @@ status_mcp:
   choices:
     - none
     - teams
-  when: "{{ use_claude_code }}"
+  when: "{{ use_agent_layer }}"
 
 tickets_mcp:
   type: str
@@ -177,7 +190,7 @@ tickets_mcp:
   choices:
     - none
     - odoo
-  when: "{{ use_claude_code }}"
+  when: "{{ use_agent_layer }}"
 
 odoo_prod_url:
   type: str
@@ -189,7 +202,7 @@ use_pipeline:
   type: bool
   help: Include the pipeline skill (task -> dev -> QC gate -> docs -> demo GIF -> PR orchestrator; runs in isolated worktree envs)?
   default: true
-  when: "{{ use_claude_code and custom_repo_pattern != '' }}"
+  when: "{{ use_agent_layer and custom_repo_pattern != '' }}"
 
 task_key_route:
   type: bool
@@ -201,19 +214,13 @@ use_kb:
   type: bool
   help: SessionStart hook printing the kb knowledge-base index and standup into every Claude Code session (needs `kb` from okolovmark/kb installed; silent otherwise)?
   default: false
-  when: "{{ use_claude_code }}"
+  when: "{{ use_agent_layer }}"
 
 use_entire:
   type: bool
   help: Sessions recorded by the Entire CLI (entire.io)? Documents it as a prerequisite; the hooks that call it skip silently when it is not installed.
   default: false
-  when: "{{ use_claude_code }}"
-
-use_antigravity:
-  type: bool
-  help: Also set the project up for Google Antigravity (.agents/)? Its rules, skills, subagents and hooks point at CLAUDE.md and .claude/, so both agents work from one set of instructions.
-  default: false
-  when: "{{ use_claude_code }}"
+  when: "{{ use_agent_layer }}"
 
 backup_s3_bucket:
   type: str
@@ -252,25 +259,25 @@ prod_remote_project_dir:
   type: str
   help: Path of this project's checkout on the prod/test box
   default: "~/{{ project_name }}"
-  when: "{{ prod_ssh_host != '' and use_claude_code and custom_repo_name }}"
+  when: "{{ prod_ssh_host != '' and use_agent_layer and custom_repo_name }}"
 
 prod_remote_odoo_conf:
   type: str
   help: Odoo config file on the prod/test box
   default: "{{ prod_remote_project_dir }}/odoo.conf"
-  when: "{{ prod_ssh_host != '' and use_claude_code and custom_repo_name }}"
+  when: "{{ prod_ssh_host != '' and use_agent_layer and custom_repo_name }}"
 
 prod_db_name:
   type: str
   help: Database name on the prod box
   default: odoo
-  when: "{{ prod_ssh_host != '' and use_claude_code and custom_repo_name }}"
+  when: "{{ prod_ssh_host != '' and use_agent_layer and custom_repo_name }}"
 
 prod_link_addons_cmd:
   type: str
   help: Command run from the box's project dir to re-link addon symlinks (deploy --link-addons)
   default: "nix run .#update-repos"
-  when: "{{ prod_ssh_host != '' and use_claude_code and custom_repo_name }}"
+  when: "{{ prod_ssh_host != '' and use_agent_layer and custom_repo_name }}"
 
 # Test boxes: one SSH alias per entry, all sharing the user and port below. A
 # single box is `{test: 203.0.113.2}`; a per-developer fleet is
@@ -305,7 +312,7 @@ test_db_name:
   type: str
   help: "Database name on a test box, used when the deploy / prod-ops scripts get a test alias as host; `{alias}` stands for the box's alias, `{short}` for the alias up to its first dot (e.g. {short}: odoo1.kepi -> odoo1)"
   default: "{{ prod_db_name }}"
-  when: "{% if test_ssh_hosts and use_claude_code and custom_repo_name %}true{% else %}false{% endif %}"
+  when: "{% if test_ssh_hosts and use_agent_layer and custom_repo_name %}true{% else %}false{% endif %}"
 
 project_dir_var:
   type: str
@@ -348,7 +355,7 @@ odoo_cmd:
 dev_in_worktrees:
   type: bool
   when: false
-  default: "{{ use_claude_code and custom_repo_name != '' }}"
+  default: "{{ use_agent_layer and custom_repo_name != '' }}"
 
 
 odoo_major:

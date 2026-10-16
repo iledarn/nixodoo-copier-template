@@ -17,13 +17,13 @@ Defaults in the table; anything you leave empty turns its feature off. See [the 
 | `default_repo_pattern` | `https://github.com/OCA/{}.git` |
 | `custom_repo_pattern` / `custom_repo_name` | empty → no custom addons repo |
 | `use_claude_code` | `true` — CLAUDE.md, hooks, skills, agents, MCP config |
+| `use_antigravity` | `false` — `.agents/` for Google Antigravity; with `use_claude_code` both agents share one set of instructions, without it Antigravity alone gets `CLAUDE.md` and `.claude/` (no Claude Code mods or memory seed) |
 | `module_prefix` / `ticket_prefix` | first word of project name / `TASK` |
 | `status_mcp` | `none` (or `teams` → my-status + teams-message skills + bootstrap questions; Teams write goes through the claude.ai Microsoft 365 connector, nothing installed) |
 | `tickets_mcp` | `none` (or `odoo` → odoo-tickets skill, ticket links, `ODOO_*_PROD` in `.env`) |
 | `odoo_prod_url` | asked when `tickets_mcp=odoo` |
 | `use_pipeline` | `true` (asked when a custom addons repo is set) |
 | `use_kb` | `false` — SessionStart hook: `kb index` + `kb today` into every session (needs `kb` from okolovmark/kb; silent when absent) |
-| `use_antigravity` | `false` — `.agents/` for Google Antigravity: rules inlining `CLAUDE.md`, `.claude/skills` registered, the four agents, the Claude hooks run through an adapter |
 | `backup_s3_bucket` | empty → no backup tooling |
 | `prod_ssh_host` (+user/url; `prod_local_ssh_host` adds a `prod-local` alias for the office-LAN address), `test_ssh_hosts` (YAML mapping alias → host, +user/port/url pattern with `{alias}`) | empty → no SSH helpers |
 | `prod_remote_project_dir` / `prod_remote_odoo_conf` / `prod_db_name` / `prod_link_addons_cmd` (where this same project sits on the box, for the deploy and prod-ops skills) | `~/<project_name>` / `<that dir>/odoo.conf` / `odoo` / `nix run .#update-repos` |

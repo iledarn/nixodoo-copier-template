@@ -13,7 +13,7 @@ import subprocess
 import sys
 import tempfile
 
-HOOK = "template/{% if use_claude_code %}.claude{% endif %}/hooks/nudge-ui-design.py"
+HOOK = "template/{% if use_agent_layer %}.claude{% endif %}/hooks/nudge-ui-design.py"
 MOD = "/w/src/custom-addons/x_appraisal"
 SKILL_CALL = '{"type":"tool_use","name":"Skill","input":{"skill":"ui-design"}}\n'
 

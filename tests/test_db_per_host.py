@@ -21,7 +21,7 @@ import tempfile
 
 import jinja2
 
-SKILLS = pathlib.Path("template/{% if use_claude_code %}.claude{% endif %}/skills")
+SKILLS = pathlib.Path("template/{% if use_agent_layer %}.claude{% endif %}/skills")
 DEPLOY = SKILLS / "{% if prod_ssh_host and custom_repo_name %}deploy{% endif %}/scripts"
 OPS = SKILLS / "{% if prod_ssh_host and custom_repo_name %}prod-ops{% endif %}/scripts"
 SCRIPTS = {

@@ -1,8 +1,13 @@
 # .agents: Antigravity on top of the Claude Code setup
 
+{% if use_claude_code %}
 Claude Code and Antigravity work in this project side by side. The instructions stay in one place,
 `.claude/` and `CLAUDE.md`; this folder only points Antigravity at them. Change behaviour there,
 not here.
+{% else %}
+The instructions live in `.claude/` and `CLAUDE.md`, in Claude Code's layout, and this folder
+only points Antigravity at them. Change behaviour there, not here.
+{% endif %}
 
 | Claude Code | Antigravity | How |
 | --- | --- | --- |
@@ -21,7 +26,9 @@ not here.
 | `entire` + `.claude/hooks/entire-fanout.sh` | `hooks.json` + `hooks/entire-fanout.sh` | `entire hooks antigravity` in root + fan-out to nested repos under `src/` |
 {% endif %}
 {% endif %}
+{% if use_claude_code %}
 | redact-secrets mod | `hooks/redact.ts` | disabled (`hooks.json` `PostToolUse` does not pass `result` / `overwriteResult` in Antigravity) |
+{% endif %}
 | `permissions.deny` (Read) | `hooks/claude_hook.py` | denied in PreToolUse |
 | claude.ai connectors | `plugins/` | project-local MCP plugins, not templated; ship them off and turn them on in Settings |
 
@@ -29,6 +36,12 @@ not here.
 entire's own Antigravity hook does: `{}` reads as an empty decision and denies the call, and
 `{"decision": "allow"}` would approve it past Antigravity's permission settings.
 
+{% if use_claude_code %}
 Not ported, Claude Code only: the status line, the Claude Code mods (`rules/antigravity.md` says
 what to do instead), the claude.ai connectors, `settings.local.json` permissions and auto-mode
 rules (Antigravity keeps its permissions in Settings), and agent memory.
+{% else %}
+`.claude/settings.json` is kept because it wires the hooks the adapter runs. The Claude Code-only
+parts (the mods, the markdown memory seed) are generated with `use_claude_code` only;
+`rules/antigravity.md` says what to do where a skill names one of them.
+{% endif %}

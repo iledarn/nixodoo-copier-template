@@ -82,7 +82,7 @@ src/
 
 ## Memory: kb
 
-Memory here lives in **kb**, a Neo4j graph (<https://github.com/okolovmark/kb>), not in Claude Code's auto-memory directory: keep that off for this project (`"autoMemoryEnabled": false` in `.claude/settings.local.json`). Without `kb` on PATH this section does not apply: the kb hooks stay silent.
+Memory here lives in **kb**, a Neo4j graph (<https://github.com/okolovmark/kb>){% if use_claude_code %}, not in Claude Code's auto-memory directory: keep that off for this project (`"autoMemoryEnabled": false` in `.claude/settings.local.json`){% endif %}. Without `kb` on PATH this section does not apply: the kb hooks stay silent.
 
 - **Session start**: `.claude/hooks/kb-session-start.sh` opens the session record and prints the index and today's standup into context. The standup is for you (the user sees it in the kb band and the `/kb` pane), so do not repeat it. No kb text in context → `kb today --scope {{ project_name }} --record-shown`; `kb: NO MEMORY` means Neo4j did not come up: say so first, then `kb status` and `journalctl --user -u neo4j-kb.service -n 100`
 - **Ground rules** are pinned feedback records: `kb index --scope {{ project_name }}` lists them, `kb show <slug>` reads one, `kb search "<topic>"` finds one. A kb record is a dated fact about this environment; Odoo framework knowledge stays in the skills

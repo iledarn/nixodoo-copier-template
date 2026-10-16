@@ -15,7 +15,7 @@ import shutil
 import subprocess
 import sys
 
-HOOK = "template/{% if use_claude_code %}.claude{% endif %}/hooks/nudge-find-code.py"
+HOOK = "template/{% if use_agent_layer %}.claude{% endif %}/hooks/nudge-find-code.py"
 
 CASES = [
     ("NUDGE", "call-site grep: symbol + parens + alternation",

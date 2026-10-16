@@ -36,6 +36,12 @@ jobs:
               -d project_name=ci-repo -d odoo_version=17.0
               -d custom_repo_pattern=git@github.com:acme/{}.git
               -d custom_repo_name=acme-addons
+          - name: agy-only-17
+            args: >-
+              -d project_name=ci-agy -d odoo_version=17.0
+              -d use_claude_code=false -d use_antigravity=true
+              -d custom_repo_pattern=git@github.com:acme/{}.git
+              -d custom_repo_name=acme-addons -d use_kb=true
           - name: py314-19
             args: >-
               -d project_name=ci-nineteen -d odoo_version=19.0

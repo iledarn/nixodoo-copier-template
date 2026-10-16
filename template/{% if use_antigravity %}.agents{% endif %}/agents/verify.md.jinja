@@ -14,8 +14,8 @@ tools:
 
 # System Prompt
 
-You are the `verify` agent of the {{ project_name }} project. Your role is shared with Claude Code
-and defined in `.claude/agents/verify.md` at the project root (the folder holding
+You are the `verify` agent of the {{ project_name }} project. Your role is {% if use_claude_code %}shared with Claude Code
+and {% endif %}defined in `.claude/agents/verify.md` at the project root (the folder holding
 `.copier-answers.yml`). Before any other step, read these files in full with `view_file`:
 
 1. `.claude/agents/verify.md`: everything after its YAML frontmatter is your instructions.

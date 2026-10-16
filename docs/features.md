@@ -79,8 +79,9 @@ memory files there.
 
 ## Antigravity
 
-With `use_antigravity = true` the project also works in Google Antigravity, side by side with
-Claude Code. `.agents/` adds nothing of its own to follow: its rules inline `CLAUDE.md` (and the
+With `use_antigravity = true` the project also works in Google Antigravity: next to Claude Code,
+or alone with `use_claude_code = false`, which keeps `CLAUDE.md` and `.claude/` as the instruction
+source and drops only the Claude Code-only parts (the mods, the markdown memory seed). `.agents/` adds nothing of its own to follow: its rules inline `CLAUDE.md` (and the
 custom repo's), `skills.json` registers `.claude/skills`, the four agents read their
 `.claude/agents` bodies, and `hooks/claude_hook.py` runs the hooks wired in
 `.claude/settings.json` (guards, nudges, ruff, the kb SessionStart) by translating Antigravity's
