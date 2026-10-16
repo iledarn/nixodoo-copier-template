@@ -209,6 +209,12 @@ use_entire:
   default: false
   when: "{{ use_claude_code }}"
 
+use_antigravity:
+  type: bool
+  help: Also set the project up for Google Antigravity (.agents/)? Its rules, skills, subagents and hooks point at CLAUDE.md and .claude/, so both agents work from one set of instructions.
+  default: false
+  when: "{{ use_claude_code }}"
+
 backup_s3_bucket:
   type: str
   help: S3 bucket with production pg_dump backups (empty = no download-backup/aws tooling)

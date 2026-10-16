@@ -77,3 +77,20 @@ src/
 - **Before typing `grep -r` over `src/`**: if the pattern is an identifier — method, field, model name, XML id — that is a `find-code` question, not a grep (`python3 .claude/skills/find-code/lsp.py sym|def|refs|model`). It is MRO-aware and answers over the whole tree at once, while a hand-scoped grep silently misses the repos you did not list in the command. grep stays right for plain strings: comments, log lines, data files, message text
 - **Never pipe a "who uses X" search into `head`/`tail`.** *Who consumes this identifier* is only useful answered in full: a truncated list reads as "these are the call sites", so the conclusion drawn from it is wrong rather than merely partial. Output too long to read is the signal to ask `lsp.py refs`, not to cut it. Field report: `grep -rn leave_rendered ... | head -20` hid the two references that decided the answer, and the wrong conclusion reached a ticket before being caught. The find-code nudge hook flags this case even when its session budget is spent
 - Never edit OCA/core code under `src/` (enforced by the guard-readonly hook){% if custom_repo_name %} — extend via a `{{ module_prefix }}_*` module{% endif %}
+{% if use_kb %}
+
+
+## Memory: kb
+
+Memory here lives in **kb**, a Neo4j graph (<https://github.com/okolovmark/kb>), not in Claude Code's auto-memory directory: keep that off for this project (`"autoMemoryEnabled": false` in `.claude/settings.local.json`). Without `kb` on PATH this section does not apply: the kb hooks stay silent.
+
+- **Session start**: `.claude/hooks/kb-session-start.sh` opens the session record and prints the index and today's standup into context. The standup is for you (the user sees it in the kb band and the `/kb` pane), so do not repeat it. No kb text in context → `kb today --scope {{ project_name }} --record-shown`; `kb: NO MEMORY` means Neo4j did not come up: say so first, then `kb status` and `journalctl --user -u neo4j-kb.service -n 100`
+- **Ground rules** are pinned feedback records: `kb index --scope {{ project_name }}` lists them, `kb show <slug>` reads one, `kb search "<topic>"` finds one. A kb record is a dated fact about this environment; Odoo framework knowledge stays in the skills
+- **Read**: `kb show <id|slug>` · `kb search "<text>"` · `kb links <id>` · `kb why <id>` · `kb next --scope {{ project_name }}`
+- **Write**: a task, open thread or blocker: `kb add "<title>" --scope {{ project_name }}` (`--due D`, `--plan D`, `--window weekend`, `--once`; no flag means it ages). A fact: `kb add "<title>" --kind note|howto|feedback|reference|decision --summary "<one line>" --body-file <f> --scope {{ project_name }}|global|personal`. Change: `kb append|edit|done|skip|snooze|archive <id>`, `kb link <a> RELATED <b>`
+{% if tickets_mcp == 'odoo' %}
+- **Tickets**: {{ ticket_prefix }} tasks arrive through `kb sync odoo`, which the hook runs. Never create one by hand; `kb promote <id> {{ ticket_prefix }}-xxxx` ties a thread to a ticket the `odoo-tickets` skill created
+{% endif %}
+- **This session**: `kb session note "<text>"` as you go; before signing off on substantive work, `kb session close --body-file <f>` with Intent, Tags, Files touched, Done, Decisions, Open threads
+- **Scope** comes from the working directory: this project plus `global`; `--scope personal` only when the user asks
+{% endif %}

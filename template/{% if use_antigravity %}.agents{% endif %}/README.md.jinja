@@ -1,0 +1,34 @@
+# .agents: Antigravity on top of the Claude Code setup
+
+Claude Code and Antigravity work in this project side by side. The instructions stay in one place,
+`.claude/` and `CLAUDE.md`; this folder only points Antigravity at them. Change behaviour there,
+not here.
+
+| Claude Code | Antigravity | How |
+| --- | --- | --- |
+| `CLAUDE.md` | `rules/project.md` | always-on rule that inlines `CLAUDE.md` |
+{% if custom_repo_name %}
+| `src/{{ custom_repo_name }}/CLAUDE.md` | `rules/addons-conventions.md` | glob rule over the addons checkout and `.worktrees/` |
+{% endif %}
+| Claude-only tools, kb, safety | `rules/antigravity.md` | always-on rule, Antigravity-only text |
+| `.claude/skills/` | `skills.json` | registers the folder; the Claude Code mods are excluded |
+| `.claude/agents/*.md` | `agents/*.md` | frontmatter for Antigravity, body reads the Claude file |
+| hooks in `.claude/settings.json` | `hooks.json` + `hooks/claude_hook.py` | runs the same scripts, translating payloads |
+{% if use_entire %}
+{% if custom_repo_name %}
+| `entire` + `.claude/hooks/entire-fanout.sh` | `hooks.json` + `hooks/entire-fanout.sh` | `entire hooks antigravity` in root + fan-out to `src/{{ custom_repo_name }}` |
+{% else %}
+| `entire` + `.claude/hooks/entire-fanout.sh` | `hooks.json` + `hooks/entire-fanout.sh` | `entire hooks antigravity` in root + fan-out to nested repos under `src/` |
+{% endif %}
+{% endif %}
+| redact-secrets mod | `hooks/redact.ts` | disabled (`hooks.json` `PostToolUse` does not pass `result` / `overwriteResult` in Antigravity) |
+| `permissions.deny` (Read) | `hooks/claude_hook.py` | denied in PreToolUse |
+| claude.ai connectors | `plugins/` | project-local MCP plugins, not templated; ship them off and turn them on in Settings |
+
+`hooks/claude_hook.py` answers a PreToolUse call it has no objection to with an empty stdout, as
+entire's own Antigravity hook does: `{}` reads as an empty decision and denies the call, and
+`{"decision": "allow"}` would approve it past Antigravity's permission settings.
+
+Not ported, Claude Code only: the status line, the Claude Code mods (`rules/antigravity.md` says
+what to do instead), the claude.ai connectors, `settings.local.json` permissions and auto-mode
+rules (Antigravity keeps its permissions in Settings), and agent memory.

@@ -1,0 +1,8 @@
+{
+  "entries": [
+    {
+      "path": ".claude/skills",
+      "exclude": ["deploy-watch", "odoo-env-band", "pipeline-gates", "redact-secrets"]
+    }
+  ]
+}
