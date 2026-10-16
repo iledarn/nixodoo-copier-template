@@ -17,6 +17,7 @@ Defaults in the table; anything you leave empty turns its feature off. See [the 
 | `default_repo_pattern` | `https://github.com/OCA/{}.git` |
 | `custom_repo_pattern` / `custom_repo_name` | empty → no custom addons repo |
 | `use_claude_code` | `true` — CLAUDE.md, hooks, skills, agents, MCP config |
+| `use_antigravity` | `false` — `.agents/` for Google Antigravity; with `use_claude_code` both agents share one set of instructions, without it Antigravity alone gets `CLAUDE.md` and `.claude/` (no Claude Code mods or memory seed) |
 | `module_prefix` / `ticket_prefix` | first word of project name / `TASK` |
 | `status_mcp` | `none` (or `teams` → my-status + teams-message skills + bootstrap questions; Teams write goes through the claude.ai Microsoft 365 connector, nothing installed) |
 | `tickets_mcp` | `none` (or `odoo` → odoo-tickets skill, ticket links, `ODOO_*_PROD` in `.env`) |

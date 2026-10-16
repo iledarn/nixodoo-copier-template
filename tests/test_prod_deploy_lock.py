@@ -21,7 +21,7 @@ import time
 import jinja2
 
 SKILL = pathlib.Path(
-    "template/{% if use_claude_code %}.claude{% endif %}/skills/"
+    "template/{% if use_agent_layer %}.claude{% endif %}/skills/"
     "{% if prod_ssh_host and custom_repo_name %}deploy{% endif %}/scripts")
 
 ANSWERS = dict(

@@ -10,7 +10,7 @@ import subprocess
 import sys
 
 HOOK = sys.argv[1] if len(sys.argv) > 1 else (
-    "template/{% if use_claude_code %}.claude{% endif %}/hooks/"
+    "template/{% if use_agent_layer %}.claude{% endif %}/hooks/"
     "{% if use_kb %}nudge-kb-truncation.py{% endif %}"
 )
 

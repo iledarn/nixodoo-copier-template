@@ -20,6 +20,7 @@ Generated from [nixodoo-copier-template](https://github.com/okolovmark/nixodoo-c
 [Debugger](https://marketplace.visualstudio.com/items?itemName=ms-python.debugpy)
 
 {% endif %}
+{% if use_agent_layer %}
 {% if use_claude_code %}
 ### Claude Code CLI installation
 
@@ -33,6 +34,20 @@ The project ships Claude Code integration: `CLAUDE.md` (project facts) and `.cla
 Production Odoo is reached through the claude.ai Odoo connector, which each
 developer connects in claude.ai settings with their own account; nothing in the
 project holds a prod credential.
+{% endif %}
+{% endif %}
+{% if use_antigravity %}
+### Google Antigravity
+
+Open this folder as a project in Antigravity. `.agents/` points it at the same instructions,
+`CLAUDE.md` and `.claude/` (skills, `dev`/`review`/`documenter`/`verify` agents, guard hooks),
+and runs the same hooks through an adapter; `.agents/README.md` maps one to the other. Its
+terminal sandbox does not mount `/nix`: turn it off for this project, or the nix toolchain is
+out of reach.
+{% if tickets_mcp == 'odoo' %}
+Production Odoo goes through an MCP plugin you add under `.agents/plugins/`, shipped off and
+signed in as yourself.
+{% endif %}
 {% endif %}
 
 {% if use_kb %}Claude's persistent memory for this project lives in
@@ -58,7 +73,7 @@ A markdown memory from before kb (`state.md`, `nodes/`, `journal/` in Claude's m
 this project) is imported once with `kb migrate state`, then `nodes`, then `journal`, each with
 `--scope {{ project_name }}` and a `--dry-run` first: the
 [migration guide](https://github.com/okolovmark/kb/blob/main/docs/migration.md).
-{% else %}Initialize Claude's persistent per-project memory once (index, journal, state,
+{% elif use_claude_code %}Initialize Claude's persistent per-project memory once (index, journal, state,
 bootstrap questions — see `.claude/memory-template/README.md`):
 
 ```bash
@@ -70,7 +85,7 @@ bash .claude/memory-template/scripts/init-memory.sh
 ### Entire CLI installation
 
 Sessions here are recorded by [Entire](https://entire.io): checkpoints on `refs/entire/*`,
-one session record per repository. The `.claude/` hooks call it on every phase and carry on
+one session record per repository. The {% if use_claude_code %}`.claude/` hooks{% else %}`.agents/hooks.json` hooks{% endif %} call it on every phase and carry on
 silently when it is missing, so nothing breaks without it.
 
 Prefer the release artifact over the vendor's one-line installer, which pipes a script from
@@ -78,7 +93,7 @@ the network straight into a shell. The binary is a static Go build, so unpacking
 takes:
 
 ```bash
-gh release download v0.10.6 --repo entireio/cli \
+gh release download v0.11.5 --repo entireio/cli \
   --pattern 'entire_linux_amd64.tar.gz' --pattern checksums.txt
 sha256sum -c --ignore-missing checksums.txt
 tar -xzf entire_linux_amd64.tar.gz entire git-remote-entire
@@ -86,9 +101,19 @@ install -m 755 entire git-remote-entire ~/.local/bin/
 ```
 
 The version is not pinned by the flake: it lives on each machine, like Claude Code itself,
-and the CLI nudges you when a newer one exists. 0.10.6 is what this project has been
+and the CLI nudges you when a newer one exists. 0.11.5 is what this project has been
 verified against; check yours with `entire --version`, and keep the pair you replace for a
 rollback.
+{% if use_antigravity %}
+
+Antigravity needs entire 0.11.3 or later (`entire hooks antigravity`; `.agents/hooks.json`
+already carries its entry). entire looks for Antigravity transcripts under
+`~/.gemini/antigravity-cli/brain`, where the `agy` CLI writes them; the Antigravity desktop app
+writes to `~/.gemini/antigravity/brain`. For the app, set
+`ENTIRE_TEST_ANTIGRAVITY_BRAIN_DIR="$HOME/.gemini/antigravity/brain"` in the environment
+entire's hooks run in, for instance with a wrapper `~/.local/bin/entire` that exports it and
+execs the real binary. A reinstall of entire replaces that wrapper.
+{% endif %}
 
 ### Entire and git auto-gc
 
@@ -175,7 +200,7 @@ sudo systemctl restart nix-daemon
 {% if editor == 'vscode' %}
 ├── .vscode/            # VSCode settings
 {% endif %}
-{% if use_claude_code %}
+{% if use_agent_layer %}
 ├── odools.toml         # OdooLS language-server config (find-code's LSP client)
 {% endif %}
 ├── odoo.conf           # Odoo configuration file (generated)

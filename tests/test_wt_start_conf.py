@@ -17,7 +17,7 @@ import sys
 import jinja2
 
 SRC = pathlib.Path(
-    "template/{% if use_claude_code %}.claude{% endif %}/skills"
+    "template/{% if use_agent_layer %}.claude{% endif %}/skills"
     "/{% if custom_repo_name %}worktree-env{% endif %}/scripts/wt-start.sh.jinja"
 )
 TEST_SRC = SRC.with_name("wt-test.sh.jinja")
