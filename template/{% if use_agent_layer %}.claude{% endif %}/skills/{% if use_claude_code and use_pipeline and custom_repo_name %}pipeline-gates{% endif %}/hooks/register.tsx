@@ -34,6 +34,7 @@ import {
   newRun,
   openGate,
   prRefusal,
+  prUrlIn,
   qcEvidence,
   qcHolds,
   recordVerdict,
@@ -49,7 +50,7 @@ import {
   withBlock,
   withoutStrayTasks,
 } from './gates'
-import { HAS_STATUS_GATE, ODOO_WEB_URL, TASK_URL_BASE, TICKET_PREFIX } from './config'
+import { HAS_STATUS_GATE, ODOO_WEB_URL, TASK_URL_BASE, TICKET_PREFIXES } from './config'
 
 const PANE = 'pipeline'
 const RUNS_KEPT = 20
@@ -58,8 +59,8 @@ const GATES: readonly GateName[] = ['status', 'grill', 'qc']
 const PERSON_ORIGINS = new Set(['composer', 'bridge', 'sdk'])
 const USAGE = 'usage: /pipeline-gate [status] | open <status|grill|qc|rounds> <reason> | start [TASK-KEY ...] | end'
 const TASK_STATES: readonly TaskState[] = ['pending', 'active', 'done']
-// a task key as the model is shown one, in this project's ticket prefix
-const SAMPLE_KEY = `${TICKET_PREFIX || 'PROJ'}-1234`
+// a task key as the model is shown one, in this project's first ticket prefix
+const SAMPLE_KEY = `${TICKET_PREFIXES[0] ?? 'PROJ'}-1234`
 
 const run = atom({ plugin: 'pipeline-gates', key: 'run' } as const, null)
 
@@ -174,8 +175,36 @@ function waitForGrill($: EngineInterface, current: Run, what: string): Promise<s
   return asking
 }
 
+// how a run that is over ended: Phase 7 ends it, and so does the person's /pipeline-gate end
+function endedLine(current: Run): string {
+  const how = current.phase === PHASES.length - 1 ? 'ended at' : 'was ended by you at'
+  return `the pipeline run for ${current.task || '(task not set)'} ${how} Phase ${current.phase} ${PHASES[current.phase]}`
+}
+
+// A call about a run that is over (its task, a task of its block, or none named) answers how it
+// ended and never opens a fresh run with its gates closed again: a pipeline that marked its tasks
+// done after Phase 7 got an empty run that gated what came next.
+function isOfEnded(current: Run | null, keys: readonly string[]): current is Run {
+  return current !== null && current.isDone && keys.every(key => key === current.task || hasTask(current, key))
+}
+
+// a tasks call with no run in progress changes nothing
+function noRunAnswer(current: Run | null): string {
+  if (current === null) return 'pipeline-gates: no pipeline run is active, so nothing changed; a tasks call starts a run only when `add` names a task.'
+  const hint = current.phase === PHASES.length - 1 ? " Mark a block's tasks done before Phase 7, which ends the run." : ''
+  return `pipeline-gates: ${endedLine(current)}, so nothing changed.${hint}`
+}
+
 function describe(current: Run | null): string {
-  if (!isActive(current)) return 'pipeline-gates: no pipeline run in this session.'
+  if (current === null) return 'pipeline-gates: no pipeline run in this session.'
+  if (current.isDone) {
+    return [
+      `pipeline-gates: ${endedLine(current)}; nothing is gated any more.`,
+      ...(blockLine(current) === '' ? [] : [`tasks: ${blockLine(current)}`]),
+      `PR: ${current.pr ?? 'no gh pr create seen in this run'}`,
+      'A new pipeline (the pipeline skill, Phase 0, or tasks with `add` naming another task) starts a new run.',
+    ].join('\n')
+  }
   const evidence = qcEvidence(current)
   return [
     `pipeline ${current.task || '(task not set)'} · phase ${current.phase} ${PHASES[current.phase]}`,
@@ -289,10 +318,13 @@ export const register: Register = on => {
   on('tool.call', { tool: 'mcp__pipeline-gates__phase' }, async ($, e) => {
     const input = e as unknown as Record<string, unknown>
     const task = typeof input.task === 'string' ? taskKeyIn(input.task.toUpperCase()) : ''
+    const phase = Number(input.phase)
+    // Phase 0 starts a pipeline; a later phase of the run that is over starts none
+    const before = await read($, run)
+    if (phase !== 0 && isOfEnded(before, task === '' ? [] : [task])) return { result: describe(before) }
     await start($, task)
     const current = await read($, run)
     if (!isActive(current)) return { result: describe(current) }
-    const phase = Number(input.phase)
     let entered = enterPhase(current, phase, task, await $.clock.now())
     let asked = ''
     if (typeof entered === 'string' && phase >= 2 && mayAskGrill(current)) {
@@ -329,9 +361,15 @@ export const register: Register = on => {
     const list = (value: unknown) => (Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [])
     const added = list(input.add)
     const now = await $.clock.now()
-    // added to the run in progress, never a reason to start over; with none, the block starts one
-    if (isActive(await read($, run))) await change($, r => addTasks(r, added, now, ODOO_WEB_URL))
-    else await start($, taskKeyIn(added.join(' ').toUpperCase()), added)
+    const current = await read($, run)
+    // added to the run in progress, never a reason to start over; with none, a run starts only for a
+    // task `add` names that the run just over did not have, and a move alone changes nothing
+    if (isActive(current)) await change($, r => addTasks(r, added, now, ODOO_WEB_URL))
+    else {
+      const named = added.map(item => taskKeyIn(item.toUpperCase())).filter(key => key !== '')
+      if (named.length === 0 || isOfEnded(current, named)) return { result: noRunAnswer(current) }
+      await start($, named[0] ?? '', added)
+    }
     for (const state of TASK_STATES) {
       const keys = list(input[state])
       if (keys.length > 0) await change($, r => moveTasks(r, keys, state, now))
@@ -372,6 +410,7 @@ export const register: Register = on => {
     const current = await read($, run)
     const path = filePathOf(tool, input)
     const command = tool === 'Bash' && typeof input.command === 'string' ? input.command : ''
+    const isPr = command !== '' && isPrCreate(command)
     if (isActive(current)) {
       const isDev = tool === 'Agent' && input.subagent_type === 'dev'
       const isWorktreeEdit = path !== null && isWorktreeCode(path)
@@ -401,7 +440,7 @@ export const register: Register = on => {
           await change($, r => (isNewRound(r) ? startRound(r) : r))
         }
       }
-      if (command !== '' && isPrCreate(command) && !qcHolds(current)) {
+      if (isPr && !qcHolds(current)) {
         await save($, withBlock(current, 'gh pr create', await $.clock.now()))
         $.ui.toast('pipeline-gates: gh pr create blocked')
         return { deny: prRefusal(current) }
@@ -429,6 +468,10 @@ export const register: Register = on => {
           return { ...next2, lastTests: summary.text, lastGreen: summary.isGreen ? seq : r.lastGreen }
         })
       }
+    }
+    if (isPr) {
+      const url = prUrlIn(await bashOutput($, ran.result, ran.text))
+      if (url !== '') await change($, r => ({ ...r, pr: url }))
     }
     if (tool.endsWith('__teams_send_chat_message')) {
       const chat = typeof input.chatId === 'string' ? input.chatId : 'a chat'
@@ -481,7 +524,23 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Button, Link, Text } = $.ui.resolve(e)
     const current = await read($, run)
-    if (!isActive(current)) return <Text dimColor>No pipeline run in this session. /pipeline-gate start [TASK] starts one by hand.</Text>
+    if (current === null) return <Text dimColor>No pipeline run in this session. /pipeline-gate start [TASK] starts one by hand.</Text>
+    if (current.isDone) {
+      const ended = endedLine(current)
+      return (
+        <Box flexDirection="column" rowGap={1}>
+          <Text key="pipeline-ended" bold>{`${ended.charAt(0).toUpperCase()}${ended.slice(1)}.`}</Text>
+          {blockLine(current) !== '' && <Text key="pipeline-ended-tasks" dimColor>{`tasks: ${blockLine(current)}`}</Text>}
+          {current.pr !== undefined && (
+            <Box key="pipeline-ended-pr" flexDirection="row" columnGap={1}>
+              <Text dimColor>PR</Text>
+              <Link href={current.pr} label={current.pr} />
+            </Box>
+          )}
+          <Text key="pipeline-ended-next" dimColor>Nothing is gated. The next pipeline starts a new run; /pipeline-gate start [TASK] starts one by hand.</Text>
+        </Box>
+      )
+    }
     const now = await $.clock.now()
     const ago = (at: number) => {
       const minutes = Math.max(0, Math.round((now - at) / 60_000))

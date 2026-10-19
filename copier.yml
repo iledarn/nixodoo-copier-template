@@ -164,7 +164,7 @@ module_prefix:
 
 ticket_prefix:
   type: str
-  help: Ticket key prefix (e.g. PROJ for PROJ-123), for commit/PR conventions and the only task keys the pipeline takes into its block
+  help: Ticket key prefix (e.g. PROJ for PROJ-123), for commit/PR conventions and the task keys the pipeline takes into its block (with extra_ticket_prefixes, the only ones)
   default: "TASK"
   when: "{{ use_agent_layer }}"
 
@@ -203,6 +203,13 @@ use_pipeline:
   help: Include the pipeline skill (task -> dev -> QC gate -> docs -> demo GIF -> PR orchestrator; runs in isolated worktree envs)?
   default: true
   when: "{{ use_agent_layer and custom_repo_pattern != '' }}"
+
+extra_ticket_prefixes:
+  type: str
+  help: Other ticket key prefixes the pipeline takes as task keys besides ticket_prefix, space or comma separated (e.g. AI for a second project's AI-12); empty for none
+  default: ""
+  validator: "{% if extra_ticket_prefixes | regex_search('[^A-Za-z0-9 ,]') %}Letters and digits only, separated by spaces or commas{% endif %}"
+  when: "{{ use_pipeline }}"
 
 task_key_route:
   type: bool

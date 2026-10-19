@@ -35,6 +35,9 @@ export type Run = {
   fixRounds?: number
   roundSeq?: number
   extraRounds?: number
+  // the pull request a gh pr create of this run printed (absent until one did)
+  pr?: string
+  // Phase 7 ends a run, and so does the person's /pipeline-gate end; the run stays, to say how it ended
   isDone: boolean
 }
 

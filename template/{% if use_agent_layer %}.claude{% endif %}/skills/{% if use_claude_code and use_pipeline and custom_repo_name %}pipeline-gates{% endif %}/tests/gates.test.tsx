@@ -3,13 +3,14 @@ import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import type { BlockTask } from '../types'
-import { HAS_STATUS_GATE, ODOO_WEB_URL, TASK_URL_BASE, TICKET_PREFIX } from '../hooks/config'
+import { HAS_STATUS_GATE, ODOO_WEB_URL, TASK_URL_BASE, TICKET_PREFIXES } from '../hooks/config'
 import {
   addTasks,
   blockLine,
   enterPhase,
   isDocPath,
   isNewRound,
+  isPrCreate,
   isWorktreeCode,
   moveTasks,
   newRun,
@@ -25,8 +26,10 @@ import {
   withoutStrayTasks,
 } from '../hooks/gates'
 
-// task keys in this project's ticket prefix; with none, any word-dash-number is a key
-const K = TICKET_PREFIX || 'KIO'
+// task keys in this project's ticket prefixes; with none, any word-dash-number is a key
+const K = TICKET_PREFIXES[0] ?? 'KIO'
+const HAS_PREFIX = TICKET_PREFIXES.length > 0
+const PR_URL = 'https://github.com/acme/addons/pull/77'
 const WT = '/p/.worktrees/kio-9-x'
 const GREEN = 'INFO odoo.tests.result: 0 failed, 0 error(s) of 14 tests when loading database'
 const PANE = {
@@ -77,6 +80,9 @@ function engine(
       person.pushes.push(e.message)
       return { result: { message: e.message, pushSent: true } }
     }
+    if (e.tool === 'Bash' && String(e.command).includes('gh pr create')) {
+      return { result: { stdout: `${PR_URL}\n`, stderr: '', interrupted: false } }
+    }
     return e.tool === 'Bash' && String(e.command).includes('--test-enable')
       ? { result: { stdout: GREEN, stderr: '', interrupted: false } }
       : { result: { ok: true } }
@@ -109,14 +115,52 @@ describe('rules', () => {
 
   test('a task key is the ticket prefix and a number: a month column, a standard, another project is none', () => {
     const prose = `${K}-1909 THREE TICKS (SCREENSHOT: MONTH COLUMNS JAN-2026.., ISO-9001, BP-33)`
-    expect(taskKeysIn(prose)).toEqual(TICKET_PREFIX === '' ? [`${K}-1909`, 'JAN-2026', 'ISO-9001', 'BP-33'] : [`${K}-1909`])
+    expect(taskKeysIn(prose)).toEqual(HAS_PREFIX ? [`${K}-1909`] : [`${K}-1909`, 'JAN-2026', 'ISO-9001', 'BP-33'])
+  })
+
+  test('a task of each project the prefixes name is a task key', () => {
+    const other = TICKET_PREFIXES[1]
+    if (other === undefined) return
+    expect(taskKeysIn(`${K}-1909 and ${other}-21, not JAN-2026`)).toEqual([`${K}-1909`, `${other}-21`])
+    expect(taskKeyIn(`${other.toLowerCase()}-21 admin lists`.toUpperCase())).toBe(`${other}-21`)
+  })
+
+  test('the PR guard reads the command the shell runs, not the text it carries', () => {
+    const runs = [
+      'gh pr create --fill',
+      'cd /p/.worktrees/kio-9-x && gh pr create --fill',
+      'GH_REPO=acme/addons gh pr create --fill',
+      'url=$(gh pr create --fill) && echo "$url"',
+      'echo "opened: $(gh pr create --fill)"',
+      'echo `gh pr create --fill`',
+      "bash -lc 'gh pr create --fill'",
+      '/usr/bin/gh pr create --fill',
+      'gh pr new --fill',
+      'gh pr -R acme/addons create --fill',
+      'timeout 60 gh pr create --fill 2>&1',
+      'git push -u origin HEAD\ngh pr create --fill',
+      `gh pr create --title "x" --body "$(cat <<'EOF'\nIt doesn't (quite) close it\nEOF\n)"`,
+      "bash <<'EOF'\ngh pr create --fill\nEOF",
+    ]
+    const carries = [
+      'kb add "the guard refused gh pr create in a quoted note" --scope kaertech-odoo-16',
+      "kb append 996 --body-file - <<'EOF'\nthen gh pr create was refused\nEOF",
+      "git commit -m 'gh pr create waits for QC'",
+      'grep -n "gh pr create" SKILL.md',
+      'echo gh pr create',
+      'gh pr view 12 && gh pr list',
+      '# gh pr create comes later\ngit status',
+      `kb add "$(printf '%s' 'gh pr create')"`,
+    ]
+    expect(carries.filter(command => isPrCreate(command))).toEqual([])
+    expect(runs.filter(command => !isPrCreate(command))).toEqual([])
   })
 
   test('a stray key a run was saved with leaves its block', () => {
     const stray: BlockTask = { key: 'JAN-2026', title: '', state: 'pending', at: 0, url: '' }
     const task: BlockTask = { key: `${K}-1909`, title: 'forecast', state: 'active', at: 1, url: '' }
     const kept = withoutStrayTasks({ ...newRun(`${K}-1909`, 0), tasks: [stray, task] })
-    expect(kept.tasks?.map(each => each.key)).toEqual(TICKET_PREFIX === '' ? ['JAN-2026', `${K}-1909`] : [`${K}-1909`])
+    expect(kept.tasks?.map(each => each.key)).toEqual(HAS_PREFIX ? [`${K}-1909`] : ['JAN-2026', `${K}-1909`])
     const clean = addTasks(newRun(`${K}-1`, 0), [`${K}-1`], 0)
     expect(withoutStrayTasks(clean)).toBe(clean)
   })
@@ -264,6 +308,90 @@ test('only the person ends a run', async ($, on) => {
   const byYou = await $.command.run({ command: 'pipeline-gate', args: 'end', ...TYPED })
   expect(byYou.text).toContain('the run is ended')
   expect((await $.tool.call(dev)).deny).toBeUndefined()
+  const status = await $.command.run({ command: 'pipeline-gate', args: 'status', ...TYPED })
+  expect(status.text).toContain(`the pipeline run for ${K}-9 was ended by you at Phase 0`)
+})
+
+// the gates opened by hand and a QC pass, so the run can reach its PR
+async function toPr($: Engine): Promise<void> {
+  await $.command.run({ command: 'pipeline-gate', args: `start ${K}-9`, ...TYPED })
+  for (const gate of ['status teams is down', 'grill agreed in chat', 'qc reviewed by hand']) {
+    await $.command.run({ command: 'pipeline-gate', args: `open ${gate}`, ...TYPED })
+  }
+}
+
+test('Phase 7 ends the run, and the gates and the pane say it ended there, with its PR', async ($, on) => {
+  engine(on)
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  await toPr($)
+  await $.tool.call({ tool: 'mcp__pipeline-gates__phase', phase: 6, task: `${K}-9` })
+  expect((await $.tool.call({ tool: 'Bash', command: 'gh pr create --fill' })).deny).toBeUndefined()
+  await $.tool.call({ tool: 'mcp__pipeline-gates__tasks', done: [`${K}-9`] })
+
+  const closed = await $.tool.call({ tool: 'mcp__pipeline-gates__phase', phase: 7 })
+  expect(String(closed.result)).toContain(`the pipeline run for ${K}-9 ended at Phase 7 Memory closure`)
+  const gates = String((await $.tool.call({ tool: 'mcp__pipeline-gates__gates' })).result)
+  expect(gates).toContain('ended at Phase 7')
+  expect(gates).toContain(`PR: ${PR_URL}`)
+  expect(gates).not.toContain('no pipeline run in this session')
+  const pane = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await pane.find({ text: 'ended at Phase 7' })).toBeDefined()
+  expect((await pane.findAll({ type: 'Link' })).map(link => link.props.href)).toContain(PR_URL)
+  await pane.unmount()
+})
+
+test('a tasks move with no run active opens none and changes nothing', async ($, on) => {
+  engine(on)
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  const none = await $.tool.call({ tool: 'mcp__pipeline-gates__tasks', done: [`${K}-9`] })
+  expect(String(none.result)).toContain('no pipeline run is active')
+  expect(String((await $.tool.call({ tool: 'mcp__pipeline-gates__gates' })).result)).toContain('no pipeline run in this session')
+
+  // the KIO-1909 order: Phase 7 first, the block's tasks marked done after it
+  await toPr($)
+  await $.tool.call({ tool: 'mcp__pipeline-gates__phase', phase: 7, task: `${K}-9` })
+  const late = await $.tool.call({ tool: 'mcp__pipeline-gates__tasks', done: [`${K}-9`] })
+  expect(String(late.result)).toContain('ended at Phase 7')
+  expect(String(late.result)).toContain('nothing changed')
+
+  // a later call about the ended run, its own task or a phase, opens no run either: nothing is gated
+  await $.tool.call({ tool: 'mcp__pipeline-gates__tasks', add: [`${K}-9 forecast`] })
+  expect(String((await $.tool.call({ tool: 'mcp__pipeline-gates__phase', phase: 3 })).result)).toContain('ended at Phase 7')
+  expect((await $.tool.call(DEV)).deny).toBeUndefined()
+  const pane = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await pane.find({ text: 'task not set' })).toBeUndefined()
+  await pane.unmount()
+
+  // a task the ended run did not have starts a new run, its gates closed
+  await $.tool.call({ tool: 'mcp__pipeline-gates__tasks', add: [`${K}-10 next`] })
+  expect(String((await $.tool.call({ tool: 'mcp__pipeline-gates__gates' })).result)).toContain(`pipeline ${K}-10 ·`)
+  expect((await $.tool.call(DEV)).deny).toContain('grill alignment')
+})
+
+test('the PR-create words inside an argument are neither refused nor recorded as a block', async ($, on) => {
+  engine(on)
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  await $.command.run({ command: 'pipeline-gate', args: `start ${K}-9`, ...TYPED })
+  const note = 'kb add "the guard refused gh pr create in a quoted note" --scope kaertech-odoo-16'
+  expect((await $.tool.call({ tool: 'Bash', command: note })).deny).toBeUndefined()
+  const body = "kb append 996 --body-file - <<'EOF'\nthen gh pr create was refused\nEOF"
+  expect((await $.tool.call({ tool: 'Bash', command: body })).deny).toBeUndefined()
+  const pane = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await pane.find({ text: 'Blocked' })).toBeUndefined()
+  await pane.unmount()
+  expect((await $.tool.call({ tool: 'Bash', command: 'cd /p && gh pr create --fill' })).deny).toContain('QC gate passes')
+})
+
+test('a pipeline for a task of another project the prefixes name takes its key', async ($, on) => {
+  const other = TICKET_PREFIXES[1]
+  if (other === undefined) return
+  engine(on)
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'Skill', skill: 'pipeline', args: `${other}-21 AI admin lists (screenshots: month columns JAN-2026..)` })
+  await $.tool.call({ tool: 'mcp__pipeline-gates__phase', phase: 1, task: `${other}-21` })
+  const gates = String((await $.tool.call({ tool: 'mcp__pipeline-gates__gates' })).result)
+  expect(gates).toContain(`pipeline ${other}-21 ·`)
+  expect(gates).not.toContain('tasks:')
 })
 
 test('a pipeline for another task starts over with its gates closed', async ($, on) => {
@@ -364,7 +492,7 @@ test('a product code named beside the task does not join the block', async ($, o
 })
 
 test('a month column a screenshot description names is no task', async ($, on) => {
-  if (TICKET_PREFIX === '') return
+  if (!HAS_PREFIX) return
   engine(on)
   await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
   const args = 'show invoiced quantities too (screenshots: XLSX Forecast 24M Rolling Report with month columns JAN-2026..)'
@@ -378,7 +506,7 @@ test('a month column a screenshot description names is no task', async ($, on) =
 })
 
 test('a run saved with a stray key in its block comes back without it', async ($, on) => {
-  if (TICKET_PREFIX === '') return
+  if (!HAS_PREFIX) return
   const stray: BlockTask = { key: 'JAN-2026', title: '', state: 'pending', at: 0, url: '' }
   const task: BlockTask = { key: `${K}-1909`, title: 'forecast', state: 'active', at: 1, url: '' }
   const next: BlockTask = { key: `${K}-1910`, title: 'wizard', state: 'pending', at: 1, url: '' }
