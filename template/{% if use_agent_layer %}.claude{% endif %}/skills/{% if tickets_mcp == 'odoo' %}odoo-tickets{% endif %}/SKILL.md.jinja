@@ -208,10 +208,34 @@ execute("project.task", "write", [[<blocked_id>], {"depend_on_ids": [[4, blocker
   (dependencies also need group `project.group_project_task_dependencies`); the
   prod default project has both.
 
-## Attachments (demo GIFs, executed scripts, exports)
+## Attachments (screenshots, demo GIFs, executed scripts, exports)
 
-Generic mechanism — any local file. Pick `mimetype` per kind: `image/gif`,
-`text/x-python` (scripts), `text/plain`, `text/csv`.
+Generic mechanism — any local file. **Use `begin_upload` when the connector
+offers it** (odoo-fast-mcp with sign-in): the file goes from the shell straight
+to the server, never through the conversation, and lands byte for byte.
+
+```
+link = begin_upload(model="project.task", res_id=<id>, filename="<file>")
+# Bash: run link["command"] with FILE replaced by the path, i.e.
+#   curl -sS --fail-with-body --data-binary @<path> '<upload_url>'
+# -> {"id": <att>, "checksum": "<sha1>", "file_size": ..., ...}
+execute("project.task", "message_post", [[<id>]],
+        {..internal-note kwargs.., "attachment_ids": [<att>, ...]})
+```
+
+- One link per file: single use, 10 minutes, 20 MB. Several files: a link
+  each, then one note carrying all their ids.
+- Check `checksum` against `sha1sum <path>`; a mismatch means the file did not
+  arrive intact, so upload it again. Images are stored as sent, not shrunk.
+- `mimetype` is optional; Odoo infers it from the name.
+- A 401 means the connector session has no stored credential (reconnect it);
+  a 403 means your account may not change that record.
+
+**Without `begin_upload`** (another Odoo MCP, or no shell): base64 through
+`create`, for **small files only** (a few hundred KB). The bytes pass through
+the model's context, cost tokens and can be corrupted on the way. Pick
+`mimetype` per kind: `image/png`, `image/gif`, `text/x-python` (scripts),
+`text/plain`, `text/csv`.
 
 ```
 b64 = base64 of the local file
@@ -221,6 +245,10 @@ att = execute("ir.attachment", "create", [{"name": "<file>",
 execute("project.task", "message_post", [[<id>]],
         {..internal-note kwargs.., "attachment_ids": [att]})
 ```
+
+Then read the attachment's `checksum` and compare it with `sha1sum`. A file
+too big for this path stays off the ticket: say so and where it is, never post
+a truncated or re-typed copy.
 
 ### Always attach scripts you run against prod
 
