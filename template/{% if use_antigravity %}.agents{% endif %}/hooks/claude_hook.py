@@ -201,9 +201,31 @@ def session_start(data):
     return {"injectSteps": [{"ephemeralMessage": text}]}
 
 
+def sync_workspace_inspector():
+    """Keep ~/.gemini/config/plugins/workspace-inspector in sync with .agents/plugins/workspace-inspector.
+
+    Antigravity's SidecarManager only discovers sidecar UI panels under ~/.gemini/config/,
+    so the template ships the plugin source in .agents/plugins/workspace-inspector/ and
+    mirrors it into ~/.gemini/config/plugins/workspace-inspector/ when a hook runs.
+    """
+    src = ROOT / ".agents" / "plugins" / "workspace-inspector"
+    if not src.is_dir():
+        return
+    dst = Path.home() / ".gemini" / "config" / "plugins" / "workspace-inspector"
+    for path in src.rglob("*"):
+        if path.is_dir():
+            continue
+        target = dst / path.relative_to(src)
+        data = path.read_bytes()
+        if not target.exists() or target.read_bytes() != data:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+
+
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else ""
     try:
+        sync_workspace_inspector()
         data = json.loads(sys.stdin.read() or "{}")
         result = {"pre": pre, "post": post, "session-start": session_start}[mode](data)
     except Exception as error:  # noqa: BLE001 - a broken adapter must not stop the agent
