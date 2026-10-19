@@ -49,8 +49,12 @@ SETTINGS = {
 def project():
     root = tempfile.mkdtemp()
     os.makedirs(f"{root}/.agents/hooks")
+    os.makedirs(f"{root}/.agents/plugins/workspace-inspector")
     os.makedirs(f"{root}/.claude/hooks")
+    os.makedirs(f"{root}/home")
     shutil.copy(ADAPTER, f"{root}/.agents/hooks/claude_hook.py")
+    with open(f"{root}/.agents/plugins/workspace-inspector/plugin.json", "w") as fh:
+        json.dump({"name": "workspace-inspector", "version": "1.0.0"}, fh)
     with open(f"{root}/.claude/settings.json", "w") as fh:
         json.dump(SETTINGS, fh)
     with open(f"{root}/.claude/hooks/guard.sh", "w") as fh:
@@ -71,6 +75,7 @@ def twice(args):
 def call(root, mode, name, args, raw=None):
     payload = raw if raw is not None else json.dumps({"conversationId": "c1", "toolCall": {"name": name, "args": args}})
     env = {k: v for k, v in os.environ.items() if k != "PROJECT_DIR"}
+    env["HOME"] = f"{root}/home"
     done = subprocess.run(
         [sys.executable, f"{root}/.agents/hooks/claude_hook.py", mode],
         input=payload, capture_output=True, text=True, env=env, check=False,
@@ -112,6 +117,9 @@ def main():
     ok = not os.path.exists(f"{root}/fanout-ran")
     failures += not ok
     print(f"  {'ok  ' if ok else 'FAIL'} the Claude-only entire fan-out never runs")
+    ok = os.path.isfile(f"{root}/home/.gemini/config/plugins/workspace-inspector/plugin.json")
+    failures += not ok
+    print(f"  {'ok  ' if ok else 'FAIL'} workspace-inspector sidecar plugin syncs into ~/.gemini/config/plugins/")
     shutil.rmtree(root)
     print("PASS" if not failures else f"{failures} FAILED")
     return 1 if failures else 0

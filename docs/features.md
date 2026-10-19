@@ -85,7 +85,10 @@ source and drops only the Claude Code-only parts (the mods, the markdown memory 
 custom repo's), `skills.json` registers `.claude/skills`, the four agents read their
 `.claude/agents` bodies, and `hooks/claude_hook.py` runs the hooks wired in
 `.claude/settings.json` (guards, nudges, ruff, the kb SessionStart) by translating Antigravity's
-payloads. With `use_entire` it also records Antigravity sessions (entire >= 0.11.3), and with
+payloads. `plugins/workspace-inspector/` adds a `Workspace Customizations` UI panel under
+`Overview → Plugins` (mirrored to `~/.gemini/config/plugins/` by `hooks/claude_hook.py`) showing
+the project's workspace-scoped plugins, MCP servers and tools, custom agents, skills, rules and
+hooks. With `use_entire` it also records Antigravity sessions (entire >= 0.11.3), and with
 `status_mcp = teams` it ships `.agents/plugins/teams-mcp/` (`okolovmark/teams-mcp`). What has no
 Antigravity equivalent (the Claude Code mods, the claude.ai connectors) is spelled out in
 `.agents/rules/antigravity.md`.

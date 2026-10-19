@@ -35,6 +35,7 @@ only points Antigravity at them. Change behaviour there, not here.
 {% else %}
 | claude.ai connectors | `plugins/` | project-local MCP plugins |
 {% endif %}
+| workspace customizations UI | `plugins/workspace-inspector/` | `Overview → Plugins → Workspace Customizations` sidecar panel (mirrored to `~/.gemini/config/plugins/` by `hooks/claude_hook.py`) |
 
 `hooks/claude_hook.py` answers a PreToolUse call it has no objection to with an empty stdout, as
 entire's own Antigravity hook does: `{}` reads as an empty decision and denies the call, and
