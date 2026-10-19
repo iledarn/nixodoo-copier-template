@@ -164,7 +164,7 @@ module_prefix:
 
 ticket_prefix:
   type: str
-  help: Ticket key prefix used in commit/PR conventions (e.g. PROJ for PROJ-123)
+  help: Ticket key prefix (e.g. PROJ for PROJ-123), for commit/PR conventions and the only task keys the pipeline takes into its block
   default: "TASK"
   when: "{{ use_agent_layer }}"
 

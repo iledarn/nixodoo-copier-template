@@ -1,4 +1,5 @@
 import type { BlockTask, Gate, GateName, Run, TaskState } from '../types'
+import { TICKET_PREFIX } from './config'
 
 export const PHASES = [
   'Memory bootstrap',
@@ -30,9 +31,12 @@ const WORKTREE = /\/\.worktrees\/(?!_env\/)[A-Za-z0-9][A-Za-z0-9._-]*\//
 const DOC_PATH = /\/readme\/|\/README\.(?:rst|md)$|\/static\/description\/|\.puml$/
 const TEST_SUMMARY = /(\d+) failed, (\d+) error\(s\) of (\d+) tests/g
 const PR_CREATE = /\bgh\s+pr\s+create\b/
-// project_key numbers a project's tasks from an unpadded sequence, so a key's number never starts
-// with 0; product codes are zero-padded (RAW-000010, ASM-001640) and stay out of the block
-const TASK_KEY = /\b[A-Z][A-Z0-9]{1,9}-[1-9]\d*\b/
+// A task key is the ticket prefix and a number, so prose naming a month column (JAN-2026), a
+// standard (ISO-9001) or another project's task stays out of the block; without a prefix, any
+// word-dash-number. project_key numbers a project's tasks from an unpadded sequence, so a key's
+// number never starts with 0: product codes are zero-padded (RAW-000010, ASM-001640).
+const KEY_PREFIX = TICKET_PREFIX === '' ? '[A-Z][A-Z0-9]{1,9}' : TICKET_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+const TASK_KEY = new RegExp(`\\b${KEY_PREFIX}-[1-9]\\d*\\b`)
 
 export function newRun(task: string, now: number, hasStatusGate = true): Run {
   return {
@@ -88,6 +92,12 @@ export function taskKeysIn(text: string): string[] {
 
 export function tasksOf(run: Run): BlockTask[] {
   return run.tasks ?? []
+}
+
+// a block saved before keys were bound to the ticket prefix can hold a word that is no key (JAN-2026)
+export function withoutStrayTasks(run: Run): Run {
+  const tasks = tasksOf(run).filter(task => taskKeyIn(task.key) === task.key)
+  return tasks.length === tasksOf(run).length ? run : { ...run, tasks }
 }
 
 export function hasTask(run: Run, key: string): boolean {

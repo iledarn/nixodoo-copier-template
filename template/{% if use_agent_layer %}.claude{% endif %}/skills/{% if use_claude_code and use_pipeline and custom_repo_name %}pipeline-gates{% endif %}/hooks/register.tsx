@@ -47,8 +47,9 @@ import {
   tasksOf,
   testSummary,
   withBlock,
+  withoutStrayTasks,
 } from './gates'
-import { HAS_STATUS_GATE, ODOO_WEB_URL, TASK_URL_BASE } from './config'
+import { HAS_STATUS_GATE, ODOO_WEB_URL, TASK_URL_BASE, TICKET_PREFIX } from './config'
 
 const PANE = 'pipeline'
 const RUNS_KEPT = 20
@@ -57,6 +58,8 @@ const GATES: readonly GateName[] = ['status', 'grill', 'qc']
 const PERSON_ORIGINS = new Set(['composer', 'bridge', 'sdk'])
 const USAGE = 'usage: /pipeline-gate [status] | open <status|grill|qc|rounds> <reason> | start [TASK-KEY ...] | end'
 const TASK_STATES: readonly TaskState[] = ['pending', 'active', 'done']
+// a task key as the model is shown one, in this project's ticket prefix
+const SAMPLE_KEY = `${TICKET_PREFIX || 'PROJ'}-1234`
 
 const run = atom({ plugin: 'pipeline-gates', key: 'run' } as const, null)
 
@@ -106,7 +109,7 @@ async function start($: EngineInterface, task: string, block: readonly string[] 
 
 async function restore($: EngineInterface): Promise<void> {
   const saved = await $.store.get(`run:${await $.session.id()}`)
-  if (saved !== undefined && saved !== null) await update($, run, () => saved as Run)
+  if (saved !== undefined && saved !== null) await update($, run, () => withoutStrayTasks(saved as Run))
   const keys = (await $.store.keys()).filter(key => key.startsWith('run:'))
   for (const key of keys.slice(0, Math.max(0, keys.length - RUNS_KEPT))) await $.store.delete(key)
 }
@@ -231,7 +234,7 @@ export const register: Register = on => {
         type: 'object',
         properties: {
           phase: { type: 'integer', minimum: 0, maximum: 7 },
-          task: { type: 'string', description: 'The task key, KIO-1234' },
+          task: { type: 'string', description: `The task key, ${SAMPLE_KEY}` },
         },
         required: ['phase'],
       },
@@ -252,11 +255,11 @@ export const register: Register = on => {
     await $.tool.register({
       name: 'tasks',
       description:
-        "The block of tasks this pipeline run works through, and where each stands: the user watches it as progress in the pipeline pane and band. A block is one run (one Teams status, one grill alignment), so a task of the block never resets the gates. `add` the block's tasks, each \"KIO-1234 short title <its _url from the Odoo connector>\" (the URL gives the task an open button in the pane; a pipeline started with several keys has the keys already, add again to give titles and URLs). Then move them as the work goes: `active` when you start on a task, `done` when it is finished (its part is in the PR, or it closed without code), `pending` to put one back. Tasks that share one PR are yours to mark.",
+        `The block of tasks this pipeline run works through, and where each stands: the user watches it as progress in the pipeline pane and band. A block is one run (one Teams status, one grill alignment), so a task of the block never resets the gates. \`add\` the block's tasks, each "${SAMPLE_KEY} short title <its _url from the Odoo connector>" (the URL gives the task an open button in the pane; a pipeline started with several keys has the keys already, add again to give titles and URLs). Then move them as the work goes: \`active\` when you start on a task, \`done\` when it is finished (its part is in the PR, or it closed without code), \`pending\` to put one back. Tasks that share one PR are yours to mark.`,
       inputSchema: {
         type: 'object',
         properties: {
-          add: { type: 'array', items: { type: 'string' }, description: 'Tasks of the block: "KIO-1234 short title https://…/web#id=…" (title and URL optional)' },
+          add: { type: 'array', items: { type: 'string' }, description: `Tasks of the block: "${SAMPLE_KEY} short title https://…/web#id=…" (title and URL optional)` },
           active: { type: 'array', items: { type: 'string' }, description: 'Task keys now in work' },
           done: { type: 'array', items: { type: 'string' }, description: 'Task keys finished' },
           pending: { type: 'array', items: { type: 'string' }, description: 'Task keys put back to pending' },

@@ -6,3 +6,5 @@ export const HAS_STATUS_GATE: boolean = {{ 'true' if status_mcp == 'teams' else 
 export const ODOO_WEB_URL: string = {{ (((odoo_prod_url | default('')).rstrip('/') ~ '/web') if (odoo_prod_url | default('')) else (prod_web_url | default(''))) | tojson }}
 // With task_key_route, a task without a record URL opens by its key at project_key's /tasks/<key>.
 export const TASK_URL_BASE: string = {{ (((odoo_prod_url | default('')).rstrip('/') ~ '/tasks/') if ((task_key_route | default(false)) and (odoo_prod_url | default(''))) else '') | tojson }}
+// A task key is ticket_prefix and a number: any other word-dash-number in a prompt is not a task.
+export const TICKET_PREFIX: string = {{ (ticket_prefix | default('')).strip().upper() | tojson }}

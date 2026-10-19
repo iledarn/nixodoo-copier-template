@@ -2,7 +2,8 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { HAS_STATUS_GATE, ODOO_WEB_URL, TASK_URL_BASE } from '../hooks/config'
+import type { BlockTask } from '../types'
+import { HAS_STATUS_GATE, ODOO_WEB_URL, TASK_URL_BASE, TICKET_PREFIX } from '../hooks/config'
 import {
   addTasks,
   blockLine,
@@ -21,8 +22,11 @@ import {
   taskKeysIn,
   taskUrlIn,
   testSummary,
+  withoutStrayTasks,
 } from '../hooks/gates'
 
+// task keys in this project's ticket prefix; with none, any word-dash-number is a key
+const K = TICKET_PREFIX || 'KIO'
 const WT = '/p/.worktrees/kio-9-x'
 const GREEN = 'INFO odoo.tests.result: 0 failed, 0 error(s) of 14 tests when loading database'
 const PANE = {
@@ -42,8 +46,13 @@ const DEV = { tool: 'Agent', description: 'dev', prompt: 'build it', subagent_ty
 // what the person answers in the grill dialog, and what the mod asked and pushed
 type Person = { answer?: string; isAway?: boolean; questions: string[]; pushes: string[] }
 
-function engine(on: On, agents: { id: string; type: string; name?: string }[] = [], person?: Person): void {
-  mock.store(on)
+function engine(
+  on: On,
+  agents: { id: string; type: string; name?: string }[] = [],
+  person?: Person,
+  stored: Readonly<Record<string, unknown>> = {},
+): void {
+  mock.store(on, stored)
   mock.clock(on, { now: 1_000_000 })
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('session.id', () => ({ value: 'sid-1' }))
@@ -88,45 +97,59 @@ describe('rules', () => {
     expect(isWorktreeCode('/p/.worktrees/_env/kio-9-x/odoo.conf')).toBe(false)
     expect(isWorktreeCode('/p/src/odoo-addons-16/a.py')).toBe(false)
     expect(isDocPath(`${WT}/m/readme/DESCRIPTION.md`)).toBe(true)
-    expect(taskKeyIn('run the pipeline for KIO-1834 please')).toBe('KIO-1834')
+    expect(taskKeyIn(`run the pipeline for ${K}-1834 please`)).toBe(`${K}-1834`)
   })
 
   test('a product code is no task key: task numbers carry no leading zero', () => {
-    expect(taskKeysIn('KIO-1791 ON HAND OF RAW-000010 PURGING COMPOUND, ASM-001640')).toEqual(['KIO-1791'])
+    expect(taskKeysIn(`${K}-1791 ON HAND OF RAW-000010 PURGING COMPOUND, ASM-001640`)).toEqual([`${K}-1791`])
     expect(taskKeyIn('RAW-000010 Purging Compound')).toBe('')
-    const run = addTasks(newRun('KIO-1791', 0), ['KIO-1791'], 0)
+    const run = addTasks(newRun(`${K}-1791`, 0), [`${K}-1791`], 0)
     expect(addTasks(run, ['CAP-000059 capacitor'], 1)).toBe(run)
   })
 
+  test('a task key is the ticket prefix and a number: a month column, a standard, another project is none', () => {
+    const prose = `${K}-1909 THREE TICKS (SCREENSHOT: MONTH COLUMNS JAN-2026.., ISO-9001, BP-33)`
+    expect(taskKeysIn(prose)).toEqual(TICKET_PREFIX === '' ? [`${K}-1909`, 'JAN-2026', 'ISO-9001', 'BP-33'] : [`${K}-1909`])
+  })
+
+  test('a stray key a run was saved with leaves its block', () => {
+    const stray: BlockTask = { key: 'JAN-2026', title: '', state: 'pending', at: 0, url: '' }
+    const task: BlockTask = { key: `${K}-1909`, title: 'forecast', state: 'active', at: 1, url: '' }
+    const kept = withoutStrayTasks({ ...newRun(`${K}-1909`, 0), tasks: [stray, task] })
+    expect(kept.tasks?.map(each => each.key)).toEqual(TICKET_PREFIX === '' ? ['JAN-2026', `${K}-1909`] : [`${K}-1909`])
+    const clean = addTasks(newRun(`${K}-1`, 0), [`${K}-1`], 0)
+    expect(withoutStrayTasks(clean)).toBe(clean)
+  })
+
   test('a block: its keys, titles and states', async () => {
-    expect(taskKeysIn('block KIO-1844, KIO-1845 and KIO-1441, again KIO-1844')).toEqual(['KIO-1844', 'KIO-1845', 'KIO-1441'])
-    let run = addTasks(newRun('KIO-1', 0), ['KIO-1', 'kio-2 rename the field', 'not a key'], 1)
+    expect(taskKeysIn(`block ${K}-1844, ${K}-1845 and ${K}-1441, again ${K}-1844`)).toEqual([`${K}-1844`, `${K}-1845`, `${K}-1441`])
+    let run = addTasks(newRun(`${K}-1`, 0), [`${K}-1`, `${K.toLowerCase()}-2 rename the field`, 'not a key'], 1)
     expect(run.tasks?.map(task => [task.key, task.title, task.state])).toEqual([
-      ['KIO-1', '', 'pending'],
-      ['KIO-2', 'rename the field', 'pending'],
+      [`${K}-1`, '', 'pending'],
+      [`${K}-2`, 'rename the field', 'pending'],
     ])
-    expect(addTasks(run, ['KIO-1'], 2)).toBe(run)
-    run = moveTasks(moveTasks(run, ['KIO-1', 'KIO-3'], 'active', 3), ['KIO-1'], 'done', 4)
+    expect(addTasks(run, [`${K}-1`], 2)).toBe(run)
+    run = moveTasks(moveTasks(run, [`${K}-1`, `${K}-3`], 'active', 3), [`${K}-1`], 'done', 4)
     expect(run.tasks?.map(task => task.state)).toEqual(['done', 'pending', 'active'])
     expect(blockLine(run)).toBe('1/3 done · 1 in work · 1 pending')
-    expect(blockLine(newRun('KIO-1', 0))).toBe('')
+    expect(blockLine(newRun(`${K}-1`, 0))).toBe('')
   })
 
   test('a task link opens only a record in the production web client', async () => {
     const web = 'https://erp.example.com/web'
     const record = `${web}#id=33574&model=project.task&view_type=form`
-    expect(taskUrlIn(`KIO-1 title ${record}`, web)).toBe(record)
-    expect(taskUrlIn(`KIO-1 ${web}site#id=1`, web)).toBe('')
-    expect(taskUrlIn('KIO-1 https://evil.example.com/web#id=1', web)).toBe('')
-    expect(taskUrlIn(`KIO-1 ${record}`, '')).toBe('')
-    const run = addTasks(newRun('KIO-1', 0), [`KIO-1 size the sub-assemblies ${record}`], 1, web)
-    expect(run.tasks?.[0]).toMatchObject({ key: 'KIO-1', title: 'size the sub-assemblies', url: record })
+    expect(taskUrlIn(`${K}-1 title ${record}`, web)).toBe(record)
+    expect(taskUrlIn(`${K}-1 ${web}site#id=1`, web)).toBe('')
+    expect(taskUrlIn(`${K}-1 https://evil.example.com/web#id=1`, web)).toBe('')
+    expect(taskUrlIn(`${K}-1 ${record}`, '')).toBe('')
+    const run = addTasks(newRun(`${K}-1`, 0), [`${K}-1 size the sub-assemblies ${record}`], 1, web)
+    expect(run.tasks?.[0]).toMatchObject({ key: `${K}-1`, title: 'size the sub-assemblies', url: record })
   })
 
   test('phases and verdicts refuse what their gates do not allow', async () => {
-    let run = newRun('KIO-1', 0)
+    let run = newRun(`${K}-1`, 0)
     expect(typeof enterPhase(run, 2, '', 1)).toBe('string')
-    expect(newRun('KIO-1', 0, false).status?.isOpen).toBe(true)
+    expect(newRun(`${K}-1`, 0, false).status?.isOpen).toBe(true)
     run = openGate(openGate(run, 'status', 'sent', 1), 'grill', 'confirmed', 1)
     const entered = enterPhase(run, 2, '', 2)
     expect(typeof entered).not.toBe('string')
@@ -141,7 +164,7 @@ describe('rules', () => {
   })
 
   test('a fix round is dev work after a review; the next task of a block counts afresh', () => {
-    const open = openGate(openGate(newRun('KIO-1', 0), 'status', 'sent', 1), 'grill', 'confirmed', 1)
+    const open = openGate(openGate(newRun(`${K}-1`, 0), 'status', 'sent', 1), 'grill', 'confirmed', 1)
     const dev = enterPhase(open, 2, '', 2)
     if (typeof dev === 'string') throw new Error(dev)
     expect(isNewRound(dev)).toBe(false)
@@ -153,7 +176,7 @@ describe('rules', () => {
     const back = enterPhase(run, 2, '', 10)
     if (typeof back === 'string') throw new Error(back)
     expect(back.fixRounds).toBe(1)
-    const next = enterPhase({ ...run, phase: 5 }, 2, 'KIO-2', 11)
+    const next = enterPhase({ ...run, phase: 5 }, 2, `${K}-2`, 11)
     if (typeof next === 'string') throw new Error(next)
     expect([next.fixRounds, isNewRound(next)]).toEqual([0, false])
   })
@@ -189,7 +212,7 @@ test('the dev agent and worktree edits wait for the Teams status and your grill 
 test('gh pr create waits for a QC pass that rests on a review and green tests after the last change', async ($, on) => {
   engine(on, [{ id: 'a-review', type: 'review' }])
   await $.session.start({ cwd: '/p', surface: 'terminal', isInteractive: true })
-  await $.command.run({ command: 'pipeline-gate', args: 'start KIO-9', ...TYPED })
+  await $.command.run({ command: 'pipeline-gate', args: `start ${K}-9`, ...TYPED })
   await $.command.run({ command: 'pipeline-gate', args: 'open status teams is down', ...TYPED })
   await $.command.run({ command: 'pipeline-gate', args: 'open grill agreed in chat', ...TYPED })
 
@@ -213,7 +236,7 @@ test('gh pr create waits for a QC pass that rests on a review and green tests af
 test('only the person opens a gate by hand', async ($, on) => {
   engine(on)
   await $.session.start({ cwd: '/p', surface: 'terminal', isInteractive: true })
-  await $.command.run({ command: 'pipeline-gate', args: 'start KIO-9', ...TYPED })
+  await $.command.run({ command: 'pipeline-gate', args: `start ${K}-9`, ...TYPED })
   const byPlugin = await $.command.run({
     command: 'pipeline-gate',
     args: 'open status because',
@@ -228,7 +251,7 @@ test('only the person opens a gate by hand', async ($, on) => {
 test('only the person ends a run', async ($, on) => {
   engine(on)
   await $.session.start({ cwd: '/p', surface: 'terminal', isInteractive: true })
-  await $.command.run({ command: 'pipeline-gate', args: 'start KIO-9', ...TYPED })
+  await $.command.run({ command: 'pipeline-gate', args: `start ${K}-9`, ...TYPED })
   const dev = { tool: 'Agent', description: 'dev', prompt: 'p', subagent_type: 'dev' } as const
   const bySchedule = await $.command.run({
     command: 'pipeline-gate',
@@ -246,23 +269,23 @@ test('only the person ends a run', async ($, on) => {
 test('a pipeline for another task starts over with its gates closed', async ($, on) => {
   engine(on)
   await $.session.start({ cwd: '/p', surface: 'terminal', isInteractive: true })
-  await $.tool.call({ tool: 'Skill', skill: 'pipeline', args: 'KIO-1' })
+  await $.tool.call({ tool: 'Skill', skill: 'pipeline', args: `${K}-1` })
   await $.command.run({ command: 'pipeline-gate', args: 'open status down', ...TYPED })
   await $.command.run({ command: 'pipeline-gate', args: 'open grill agreed', ...TYPED })
   const dev = { tool: 'Agent', description: 'dev', prompt: 'p', subagent_type: 'dev' } as const
   expect((await $.tool.call(dev)).deny).toBeUndefined()
 
   // the same task again keeps the run; another task does not
-  await $.tool.call({ tool: 'Skill', skill: 'pipeline', args: 'KIO-1' })
+  await $.tool.call({ tool: 'Skill', skill: 'pipeline', args: `${K}-1` })
   expect((await $.tool.call(dev)).deny).toBeUndefined()
-  await $.tool.call({ tool: 'Skill', skill: 'pipeline', args: 'KIO-2' })
+  await $.tool.call({ tool: 'Skill', skill: 'pipeline', args: `${K}-2` })
   expect((await $.tool.call(dev)).deny).toContain('grill alignment')
 })
 
 // the Teams status sent, so the grill gate is the one left shut
 async function toGrill($: Engine): Promise<void> {
   await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
-  await $.tool.call({ tool: 'Skill', skill: 'pipeline', args: 'KIO-9' })
+  await $.tool.call({ tool: 'Skill', skill: 'pipeline', args: `${K}-9` })
   if (HAS_STATUS_GATE) await $.tool.call({ tool: 'mcp__m365__teams_send_chat_message', chatId: '19:status-chat', body: 'status' })
 }
 
@@ -270,7 +293,7 @@ test('a step that waits on the grill gate pushes to the phone and asks; your pre
   const person: Person = { answer: 'Confirm', questions: [], pushes: [] }
   engine(on, [], person)
   await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
-  await $.tool.call({ tool: 'Skill', skill: 'pipeline', args: 'KIO-9' })
+  await $.tool.call({ tool: 'Skill', skill: 'pipeline', args: `${K}-9` })
   if (HAS_STATUS_GATE) {
     // the Teams status is the agent's to send: no dialog while it is missing
     expect((await $.tool.call(DEV)).deny).toContain('Teams status')
@@ -278,9 +301,9 @@ test('a step that waits on the grill gate pushes to the phone and asks; your pre
     await $.tool.call({ tool: 'mcp__m365__teams_send_chat_message', chatId: '19:status-chat', body: 'status' })
   }
 
-  const entered = await $.tool.call({ tool: 'mcp__pipeline-gates__phase', phase: 2, task: 'KIO-9' })
+  const entered = await $.tool.call({ tool: 'mcp__pipeline-gates__phase', phase: 2, task: `${K}-9` })
   expect(String(entered.result)).toContain('phase 2 Development')
-  expect(person.pushes).toEqual(['KIO-9: Phase 2 waits on your grill confirm'])
+  expect(person.pushes).toEqual([`${K}-9: Phase 2 waits on your grill confirm`])
   expect(person.questions[0]).toContain('Do you agree with the Alignment Summary?')
   expect(String((await $.tool.call({ tool: 'mcp__pipeline-gates__gates' })).result)).toContain('confirmed by you in the dialog')
   expect((await $.tool.call(DEV)).deny).toBeUndefined()
@@ -333,24 +356,50 @@ test('text typed under Other reaches the agent and keeps the gate shut', async (
 test('a product code named beside the task does not join the block', async ($, on) => {
   engine(on)
   await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
-  const args = 'KIO-1791 - Explain why Consumable products show no On Hand quantity (RAW-000010 Purging Compound)'
+  const args = `${K}-1791 - Explain why Consumable products show no On Hand quantity (RAW-000010 Purging Compound)`
   await $.tool.call({ tool: 'Skill', skill: 'pipeline', args })
   const gates = String((await $.tool.call({ tool: 'mcp__pipeline-gates__gates' })).result)
-  expect(gates).toContain('pipeline KIO-1791 ·')
+  expect(gates).toContain(`pipeline ${K}-1791 ·`)
   expect(gates).not.toContain('tasks:')
+})
+
+test('a month column a screenshot description names is no task', async ($, on) => {
+  if (TICKET_PREFIX === '') return
+  engine(on)
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  const args = 'show invoiced quantities too (screenshots: XLSX Forecast 24M Rolling Report with month columns JAN-2026..)'
+  await $.tool.call({ tool: 'Skill', skill: 'pipeline', args })
+  // the order the pipeline takes: the task joins the block, then the phase names it
+  await $.tool.call({ tool: 'mcp__pipeline-gates__tasks', add: [`${K}-1909 forecast`], active: [`${K}-1909`] })
+  await $.tool.call({ tool: 'mcp__pipeline-gates__phase', phase: 1, task: `${K}-1909` })
+  const gates = String((await $.tool.call({ tool: 'mcp__pipeline-gates__gates' })).result)
+  expect(gates).toContain(`pipeline ${K}-1909 ·`)
+  expect(gates).not.toContain('tasks:')
+})
+
+test('a run saved with a stray key in its block comes back without it', async ($, on) => {
+  if (TICKET_PREFIX === '') return
+  const stray: BlockTask = { key: 'JAN-2026', title: '', state: 'pending', at: 0, url: '' }
+  const task: BlockTask = { key: `${K}-1909`, title: 'forecast', state: 'active', at: 1, url: '' }
+  const next: BlockTask = { key: `${K}-1910`, title: 'wizard', state: 'pending', at: 1, url: '' }
+  engine(on, [], undefined, { 'run:sid-1': { ...newRun(`${K}-1909`, 0), tasks: [stray, task, next] } })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  const pane = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await pane.find({ text: `pipeline ${K}-1909 · block of 2` })).toBeDefined()
+  expect(await pane.find({ text: 'JAN-2026' })).toBeUndefined()
 })
 
 test('a block is one run: its tasks keep the gates, and the pane and band show how far it got', async ($, on) => {
   engine(on)
   await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
-  await $.tool.call({ tool: 'Skill', skill: 'pipeline', args: 'block KIO-1, KIO-2 and KIO-3' })
+  await $.tool.call({ tool: 'Skill', skill: 'pipeline', args: `block ${K}-1, ${K}-2 and ${K}-3` })
   await $.command.run({ command: 'pipeline-gate', args: 'open status down', ...TYPED })
   await $.command.run({ command: 'pipeline-gate', args: 'open grill agreed', ...TYPED })
 
   // a task of the block is the same run; one outside it starts over
-  expect(String((await $.tool.call({ tool: 'mcp__pipeline-gates__phase', phase: 2, task: 'KIO-2' })).result)).toContain('phase 2 Development')
-  await $.tool.call({ tool: 'mcp__pipeline-gates__tasks', add: ['KIO-4 rename the field'], active: ['KIO-1', 'KIO-2'] })
-  const moved = await $.tool.call({ tool: 'mcp__pipeline-gates__tasks', done: ['KIO-1'] })
+  expect(String((await $.tool.call({ tool: 'mcp__pipeline-gates__phase', phase: 2, task: `${K}-2` })).result)).toContain('phase 2 Development')
+  await $.tool.call({ tool: 'mcp__pipeline-gates__tasks', add: [`${K}-4 rename the field`], active: [`${K}-1`, `${K}-2`] })
+  const moved = await $.tool.call({ tool: 'mcp__pipeline-gates__tasks', done: [`${K}-1`] })
   expect(String(moved.result)).toContain('tasks: 1/4 done · 1 in work · 2 pending')
   expect((await $.tool.call(DEV)).deny).toBeUndefined()
 
@@ -366,7 +415,7 @@ test('a block is one run: its tasks keep the gates, and the pane and band show h
     await band.unmount()
   }
 
-  await $.tool.call({ tool: 'mcp__pipeline-gates__phase', phase: 2, task: 'KIO-9' })
+  await $.tool.call({ tool: 'mcp__pipeline-gates__phase', phase: 2, task: `${K}-9` })
   expect((await $.tool.call(DEV)).deny).toContain('grill alignment')
 })
 
@@ -374,12 +423,12 @@ test('a block task given its record URL gets an open link in the pane', async ($
   engine(on)
   await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
   const record = `${ODOO_WEB_URL}#id=33574&model=project.task&view_type=form`
-  await $.tool.call({ tool: 'mcp__pipeline-gates__tasks', add: [`KIO-1 first ${record}`, 'KIO-2 second'] })
+  await $.tool.call({ tool: 'mcp__pipeline-gates__tasks', add: [`${K}-1 first ${record}`, `${K}-2 second`] })
   for (const surface of ['desktop', 'mobile'] as const) {
     const pane = await $.ui.mount({ ...PANE, surface })
     const links = await pane.findAll({ type: 'Link' })
     // the record URL where one was given, else the key's route where the project has it
-    const byKey = TASK_URL_BASE === '' ? [] : [`${TASK_URL_BASE}KIO-2`]
+    const byKey = TASK_URL_BASE === '' ? [] : [`${TASK_URL_BASE}${K}-2`]
     expect(links.map(link => link.props.href)).toEqual([...(ODOO_WEB_URL === '' ? [] : [record]), ...byKey])
     expect(await pane.find({ text: 'second' })).toBeDefined()
     await pane.unmount()
@@ -392,10 +441,10 @@ test('each fix round goes to a fresh dev agent, and a fourth waits for you', asy
     { id: 'a-dev', type: 'dev', name: 'kio-dev' },
   ])
   await $.session.start({ cwd: '/p', surface: 'terminal', isInteractive: true })
-  await $.command.run({ command: 'pipeline-gate', args: 'start KIO-9', ...TYPED })
+  await $.command.run({ command: 'pipeline-gate', args: `start ${K}-9`, ...TYPED })
   await $.command.run({ command: 'pipeline-gate', args: 'open status teams is down', ...TYPED })
   await $.command.run({ command: 'pipeline-gate', args: 'open grill agreed in chat', ...TYPED })
-  await $.tool.call({ tool: 'mcp__pipeline-gates__phase', phase: 2, task: 'KIO-9' })
+  await $.tool.call({ tool: 'mcp__pipeline-gates__phase', phase: 2, task: `${K}-9` })
   expect((await $.tool.call(DEV)).deny).toBeUndefined()
   const ask = { tool: 'SendMessage', to: 'kio-dev', message: 'one more thing' } as const
   expect((await $.tool.call(ask)).deny).toBeUndefined()
