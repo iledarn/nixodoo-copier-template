@@ -47,9 +47,12 @@ Open this folder as a project in Antigravity. `.agents/` points it at the same i
 and runs the same hooks through an adapter; `.agents/README.md` maps one to the other. Its
 terminal sandbox does not mount `/nix`: turn it off for this project, or the nix toolchain is
 out of reach.
+{% if status_mcp == 'teams' %}
+Microsoft Teams goes through `.agents/plugins/teams-mcp/` (`okolovmark/teams-mcp`).
+{% endif %}
 {% if tickets_mcp == 'odoo' %}
-Production Odoo goes through an MCP plugin you add under `.agents/plugins/`, shipped off and
-signed in as yourself.
+Production Odoo goes through an MCP plugin you add under `.agents/plugins/`, signed in as
+yourself.
 {% endif %}
 {% endif %}
 

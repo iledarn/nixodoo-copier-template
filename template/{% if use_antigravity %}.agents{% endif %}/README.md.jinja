@@ -30,7 +30,11 @@ only points Antigravity at them. Change behaviour there, not here.
 | redact-secrets mod | `hooks/redact.ts` | disabled (`hooks.json` `PostToolUse` does not pass `result` / `overwriteResult` in Antigravity) |
 {% endif %}
 | `permissions.deny` (Read) | `hooks/claude_hook.py` | denied in PreToolUse |
-| claude.ai connectors | `plugins/` | project-local MCP plugins, not templated; ship them off and turn them on in Settings |
+{% if status_mcp == 'teams' %}
+| claude.ai connectors | `plugins/` | `plugins/teams-mcp/` (`okolovmark/teams-mcp`) + project-local MCP plugins |
+{% else %}
+| claude.ai connectors | `plugins/` | project-local MCP plugins |
+{% endif %}
 
 `hooks/claude_hook.py` answers a PreToolUse call it has no objection to with an empty stdout, as
 entire's own Antigravity hook does: `{}` reads as an empty decision and denies the call, and
