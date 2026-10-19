@@ -1,5 +1,5 @@
 import type { BlockTask, Gate, GateName, Run, TaskState } from '../types'
-import { TICKET_PREFIX } from './config'
+import { TICKET_PREFIXES } from './config'
 
 export const PHASES = [
   'Memory bootstrap',
@@ -31,11 +31,15 @@ const WORKTREE = /\/\.worktrees\/(?!_env\/)[A-Za-z0-9][A-Za-z0-9._-]*\//
 const DOC_PATH = /\/readme\/|\/README\.(?:rst|md)$|\/static\/description\/|\.puml$/
 const TEST_SUMMARY = /(\d+) failed, (\d+) error\(s\) of (\d+) tests/g
 const PR_CREATE = /\bgh\s+pr\s+create\b/
-// A task key is the ticket prefix and a number, so prose naming a month column (JAN-2026), a
-// standard (ISO-9001) or another project's task stays out of the block; without a prefix, any
-// word-dash-number. project_key numbers a project's tasks from an unpadded sequence, so a key's
-// number never starts with 0: product codes are zero-padded (RAW-000010, ASM-001640).
-const KEY_PREFIX = TICKET_PREFIX === '' ? '[A-Z][A-Z0-9]{1,9}' : TICKET_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+const PR_URL = /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+/
+// A task key is one of the ticket prefixes and a number, so prose naming a month column (JAN-2026),
+// a standard (ISO-9001) or a project the prefixes do not name stays out of the block; without a
+// prefix, any word-dash-number. project_key numbers a project's tasks from an unpadded sequence, so a
+// key's number never starts with 0: product codes are zero-padded (RAW-000010, ASM-001640).
+const KEY_PREFIX =
+  TICKET_PREFIXES.length === 0
+    ? '[A-Z][A-Z0-9]{1,9}'
+    : `(?:${TICKET_PREFIXES.map(prefix => prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`
 const TASK_KEY = new RegExp(`\\b${KEY_PREFIX}-[1-9]\\d*\\b`)
 
 export function newRun(task: string, now: number, hasStatusGate = true): Run {
@@ -77,8 +81,205 @@ export function isDocPath(path: string): boolean {
   return DOC_PATH.test(path)
 }
 
-export function isPrCreate(command: string): boolean {
-  return PR_CREATE.test(command)
+// One simple command of a shell line: its words with the quotes taken off, and the here-documents fed
+// to it. REDIRECT stands before a redirection's target, which is no word of the command.
+type ShellCommand = { words: string[]; heredocs: string[] }
+const REDIRECT = '\u0000>'
+const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*\+?=/
+// what may stand before the program a simple command runs
+const RESERVED = new Set(['!', '{', 'if', 'then', 'elif', 'else', 'while', 'until', 'do'])
+// programs that run the program after them, past their own options and a count or a duration
+const WRAPPERS = new Set(['builtin', 'command', 'env', 'exec', 'nice', 'nohup', 'sudo', 'time', 'timeout'])
+const SHELLS = new Set(['bash', 'dash', 'ksh', 'sh', 'zsh'])
+
+// Splits a shell line the way the shell does, far enough to tell which programs it runs: quotes and
+// here-documents are text, $( ) and backticks are commands of their own. Nested, the scan stops at
+// the `)` that closes its $( ), and `end` is where it stopped.
+function scanShell(src: string, start = 0, isNested = false): { commands: ShellCommand[]; end: number } {
+  const commands: ShellCommand[] = []
+  const pending: { delimiter: string; stripsTabs: boolean; command: ShellCommand }[] = []
+  let current: ShellCommand = { words: [], heredocs: [] }
+  let word: string | null = null
+  let depth = 0
+  const endWord = () => {
+    if (word !== null) current.words.push(word)
+    word = null
+  }
+  const endCommand = () => {
+    endWord()
+    if (current.words.length > 0) commands.push(current)
+    current = { words: [], heredocs: [] }
+  }
+  // a substitution's commands are the line's commands too; its text stays in the word
+  const substitute = (from: number): number => {
+    const inner = scanShell(src, from + 2, true)
+    commands.push(...inner.commands)
+    word = (word ?? '') + src.slice(from, inner.end + 1)
+    return inner.end + 1
+  }
+  const backticks = (from: number): number => {
+    let close = from + 1
+    while (close < src.length && src.charAt(close) !== '`') close += src.charAt(close) === '\\' ? 2 : 1
+    commands.push(...scanShell(src.slice(from + 1, close)).commands)
+    word = (word ?? '') + src.slice(from, close + 1)
+    return close + 1
+  }
+  // <<DELIM, <<-DELIM, <<'DELIM': the body starts on the next line
+  const heredoc = (from: number): number => {
+    let at = from + 2
+    const stripsTabs = src.charAt(at) === '-'
+    if (stripsTabs) at++
+    while (src.charAt(at) === ' ' || src.charAt(at) === '\t') at++
+    let delimiter = ''
+    while (at < src.length && !/[\s;&|<>()]/.test(src.charAt(at))) {
+      const c = src.charAt(at)
+      if (c === "'" || c === '"') {
+        const close = src.indexOf(c, at + 1)
+        const stop = close === -1 ? src.length : close
+        delimiter += src.slice(at + 1, stop)
+        at = stop + 1
+      } else {
+        delimiter += c === '\\' ? src.charAt(at + 1) : c
+        at += c === '\\' ? 2 : 1
+      }
+    }
+    pending.push({ delimiter, stripsTabs, command: current })
+    return at
+  }
+  // the bodies of the here-documents the line just ended opened, each up to its delimiter line
+  const readHeredocs = (from: number): number => {
+    let at = from
+    for (const doc of pending) {
+      const lines: string[] = []
+      while (at < src.length) {
+        const newline = src.indexOf('\n', at)
+        const stop = newline === -1 ? src.length : newline
+        const line = doc.stripsTabs ? src.slice(at, stop).replace(/^\t+/, '') : src.slice(at, stop)
+        at = stop + 1
+        if (line === doc.delimiter) break
+        lines.push(line)
+      }
+      doc.command.heredocs.push(lines.join('\n'))
+    }
+    pending.length = 0
+    return at
+  }
+
+  let i = start
+  while (i < src.length) {
+    const c = src.charAt(i)
+    const next = src.charAt(i + 1)
+    if (c === '\\') {
+      // an escaped character is text; an escaped newline joins the lines
+      if (next !== '\n') word = (word ?? '') + next
+      i += 2
+    } else if (c === "'") {
+      const close = src.indexOf("'", i + 1)
+      const stop = close === -1 ? src.length : close
+      word = (word ?? '') + src.slice(i + 1, stop)
+      i = stop + 1
+    } else if (c === '"') {
+      word = word ?? ''
+      i++
+      while (i < src.length && src.charAt(i) !== '"') {
+        const d = src.charAt(i)
+        if (d === '\\' && i + 1 < src.length && '$`"\\\n'.includes(src.charAt(i + 1))) {
+          if (src.charAt(i + 1) !== '\n') word += src.charAt(i + 1)
+          i += 2
+        } else if (d === '$' && src.charAt(i + 1) === '(') i = substitute(i)
+        else if (d === '`') i = backticks(i)
+        else {
+          word += d
+          i++
+        }
+      }
+      i++
+    } else if (c === '`') i = backticks(i)
+    else if (c === '$' && next === '(') i = substitute(i)
+    else if (c === '#' && word === null) {
+      const newline = src.indexOf('\n', i)
+      i = newline === -1 ? src.length : newline
+    } else if (c === ' ' || c === '\t') {
+      endWord()
+      i++
+    } else if (c === '\n') {
+      endCommand()
+      i = readHeredocs(i + 1)
+    } else if (c === '(') {
+      endCommand()
+      depth++
+      i++
+    } else if (c === ')') {
+      endCommand()
+      if (depth === 0 && isNested) return { commands, end: i }
+      depth = Math.max(0, depth - 1)
+      i++
+    } else if (c === ';' || c === '|' || (c === '&' && next !== '>')) {
+      endCommand()
+      i++
+    } else if (c === '<' && next === '<' && src.charAt(i + 2) !== '<') {
+      endWord()
+      i = heredoc(i)
+    } else if (c === '<' || c === '>' || c === '&') {
+      // a redirection (2>&1, &>log, <<<text): a file descriptor before it is no word either
+      if (word !== null && /^\d+$/.test(word)) word = null
+      endWord()
+      current.words.push(REDIRECT)
+      i++
+      while (i < src.length && '<>&|'.includes(src.charAt(i))) i++
+    } else {
+      word = (word ?? '') + c
+      i++
+    }
+  }
+  endCommand()
+  return { commands, end: src.length }
+}
+
+// the program a simple command runs, then its arguments: past assignments, redirections, reserved
+// words and the wrappers that run the program after them
+function programOf(words: readonly string[]): string[] {
+  const args = words.filter((word, i) => word !== REDIRECT && words[i - 1] !== REDIRECT)
+  let at = 0
+  let isWrapped = false
+  while (at < args.length) {
+    const word = args[at] ?? ''
+    if (ASSIGNMENT.test(word) || RESERVED.has(word)) at++
+    else if (WRAPPERS.has(word)) {
+      isWrapped = true
+      at++
+    } else if (isWrapped && /^(?:-|\d+(?:\.\d+)?[smhd]?$)/.test(word)) at++
+    else break
+  }
+  return args.slice(at)
+}
+
+// gh pr create, or its alias gh pr new; a --repo may stand before the subcommand
+function isGhPrCreate(args: readonly string[]): boolean {
+  const words = args.filter((word, i) => !word.startsWith('-') && !/^(?:-R|--repo)$/.test(args[i - 1] ?? ''))
+  return words[0] === 'pr' && (words[1] === 'create' || words[1] === 'new')
+}
+
+// A command line that runs gh pr create: as a program of its own (after `cd … &&`, in a $( ) or
+// backticks, under env or timeout), or through a shell's -c script, eval, or a here-document fed to a
+// shell. The words inside a quoted argument, or a here-document fed to anything else, are text and
+// no command: a `kb add` note may name it. Nested more than a few shells deep, the plain text decides.
+export function isPrCreate(command: string, depth = 0): boolean {
+  if (depth > 3) return PR_CREATE.test(command)
+  return scanShell(command).commands.some(({ words, heredocs }) => {
+    const [program = '', ...args] = programOf(words)
+    const name = program.slice(program.lastIndexOf('/') + 1)
+    if (name === 'gh') return isGhPrCreate(args)
+    if (name === 'eval') return isPrCreate(args.join(' '), depth + 1)
+    if (!SHELLS.has(name)) return false
+    const script = args.findIndex(arg => /^-[A-Za-z]*c[A-Za-z]*$/.test(arg))
+    return script === -1 ? heredocs.some(body => isPrCreate(body, depth + 1)) : isPrCreate(args[script + 1] ?? '', depth + 1)
+  })
+}
+
+// the pull request a gh pr create printed, '' when none
+export function prUrlIn(output: string): string {
+  return PR_URL.exec(output)?.[0] ?? ''
 }
 
 export function taskKeyIn(text: string): string {

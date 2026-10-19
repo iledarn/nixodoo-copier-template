@@ -23,6 +23,7 @@ Defaults in the table; anything you leave empty turns its feature off. See [the 
 | `tickets_mcp` | `none` (or `odoo` → odoo-tickets skill, ticket links, `ODOO_*_PROD` in `.env`) |
 | `odoo_prod_url` | asked when `tickets_mcp=odoo` |
 | `use_pipeline` | `true` (asked when a custom addons repo is set) |
+| `extra_ticket_prefixes` (more ticket prefixes the pipeline takes as task keys, e.g. a second project's) | empty → `ticket_prefix` alone |
 | `use_kb` | `false` — SessionStart hook: `kb index` + `kb today` into every session (needs `kb` from okolovmark/kb; silent when absent) |
 | `backup_s3_bucket` | empty → no backup tooling |
 | `prod_ssh_host` (+user/url; `prod_local_ssh_host` adds a `prod-local` alias for the office-LAN address), `test_ssh_hosts` (YAML mapping alias → host, +user/port/url pattern with `{alias}`) | empty → no SSH helpers |

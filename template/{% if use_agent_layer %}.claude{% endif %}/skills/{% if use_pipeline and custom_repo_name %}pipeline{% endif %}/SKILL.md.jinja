@@ -186,11 +186,12 @@ text:
   `dev` agent (a `SendMessage` into an old one is refused), and a fourth round is refused until the
   user grants three more.
 - A block of tasks is one run (one status, one grill alignment): start it with all the keys, or
-  call `mcp__pipeline-gates__tasks` with `add` (`"KIO-1234 short title <its _url>"`, the `_url` the
+  call `mcp__pipeline-gates__tasks` with `add` (`"{{ ticket_prefix }}-1234 short title <its _url>"`, the `_url` the
   Odoo connector returns for the task: the pane gives it an open-in-Odoo link) before the first phase
   that names another task of the block. Mark each task `active` when you start on it and `done`
   when it is finished (in the PR, or closed without code; several may share one PR): the user
-  follows the block's progress in the pipeline pane and band.
+  follows the block's progress in the pipeline pane and band. Phase 7 ends the run, so every `done`
+  goes in before it: a `tasks` call after Phase 7 changes nothing.
 - Only the user opens a gate or ends a run by hand: `/pipeline-gate open <{% if status_mcp == 'teams' %}status|{% endif %}grill|qc|rounds> <reason>`,
   `/pipeline-gate end`. Never ask for that to get past a refusal you can satisfy.
 
@@ -882,6 +883,10 @@ Report: "PR created: <URL>"
 ### Phase 7: Memory Closure
 
 After the pipeline completes — success, abort, or user-interrupted — close out memory state. **Non-negotiable**; skipping it leaves WIP entries stale and loses session history.
+
+When `mcp__pipeline-gates__tasks` is listed, mark the block's finished tasks `done` with it
+**before** you call `mcp__pipeline-gates__phase` for Phase 7: Phase 7 ends the run, and a `tasks`
+call after it changes nothing.
 
 #### Step 0: Keep the session env — never tear it down on your own
 
