@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "teams-mcp": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "git+https://github.com/okolovmark/teams-mcp.git#stable"
+      ]
+    }
+  }
+}

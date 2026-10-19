@@ -64,7 +64,7 @@ jobs:
       - name: Antigravity layer (JSON parses, adapter corpus)
         run: |
           shopt -s nullglob
-          for f in /tmp/gen/.agents/*.json; do python3 -m json.tool "$f" > /dev/null; done
+          for f in /tmp/gen/.agents/*.json /tmp/gen/.agents/plugins/*/*.json; do python3 -m json.tool "$f" > /dev/null; done
           python3 tests/test_antigravity_hook.py
       - name: nix flake check
         run: |

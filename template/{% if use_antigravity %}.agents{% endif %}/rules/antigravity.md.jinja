@@ -39,18 +39,18 @@ Skills and agents name Claude Code tools. Use the Antigravity equivalent:
 ## Claude-only pieces and what to do instead
 
 {% if status_mcp == 'teams' %}
-- **Teams / Microsoft 365** (`mcp__claude_ai_Microsoft_365__*`, `mcp__m365__*`): not connected
-  here. Write the message by the `teams-message` skill, show it, and ask the user to send it.
-{% if use_pipeline and custom_repo_name %}
-  Never say it was sent. A pipeline status gate stays closed until the user says it went out.
-{% else %}
-  Never say it was sent.
-{% endif %}
+- **Teams / Microsoft 365** (`mcp__claude_ai_Microsoft_365__*`, `mcp__m365__*`): here Teams goes
+  through the `teams-mcp` plugin (`.agents/plugins/teams-mcp/`, `okolovmark/teams-mcp#stable`):
+  `auth_status` / `get_current_user`, `search_users`, `list_chats`, `create_chat`,
+  `send_chat_message` / `send_channel_message` with `format: "markdown"`, `get_chat_messages`, and
+  inline `@Full Name` with `mentions: [{mention, userId}]`. If `auth_status` is not the user's
+  account, run `npx -y git+https://github.com/okolovmark/teams-mcp.git#stable authenticate` (or
+  ask the user to authenticate) and re-check before sending.
 {% endif %}
 {% if tickets_mcp == 'odoo' %}
-- **Odoo production connector** (the "Odoo connector" the skills call): available only when the
-  user turned on an Odoo MCP plugin under `.agents/plugins/` and signed in. Without it, ask; never
-  swap in an ssh + odoo shell read the skill did not ask for.
+- **Odoo production connector** (the "Odoo connector" the skills call): available only when an
+  Odoo MCP plugin under `.agents/plugins/` is enabled and signed in. Without it, ask; never swap
+  in an ssh + odoo shell read the skill did not ask for.
 {% endif %}
 {% if use_pipeline and custom_repo_name %}
 - **pipeline-gates** (`mcp__pipeline-gates__*`): a Claude Code mod. Hold its three gates by hand,

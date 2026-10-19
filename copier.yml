@@ -176,7 +176,7 @@ readme_gen_source:
 
 status_mcp:
   type: str
-  help: MCP used to post work status to the team (adds the my-status and teams-message skills and the Teams bootstrap questions; Teams itself goes through the claude.ai Microsoft 365 connector, which the user connects in claude.ai settings - nothing is installed in the project)
+  help: MCP used to post work status to the team (adds the my-status and teams-message skills and the Teams bootstrap questions; Teams goes through the claude.ai Microsoft 365 connector in Claude Code, and through .agents/plugins/teams-mcp in Antigravity)
   default: none
   choices:
     - none
