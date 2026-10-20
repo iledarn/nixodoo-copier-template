@@ -96,7 +96,8 @@ an update: copier can add a second key with the same name, and JSON keeps only t
 - [docs/questions.md](docs/questions.md) — every question copier asks
 - [docs/notes.md](docs/notes.md) — gotchas worth knowing before they bite
 - `nix flake check` shellchecks every generated script; `python3 tests/test_nudge_find_code.py`
-  runs the hook regression corpus
+  runs the hook regression corpus; `claude plugin test` in a mod's folder runs that mod's tests
+  (CI runs every mod a render ships)
 
 ## License
 
