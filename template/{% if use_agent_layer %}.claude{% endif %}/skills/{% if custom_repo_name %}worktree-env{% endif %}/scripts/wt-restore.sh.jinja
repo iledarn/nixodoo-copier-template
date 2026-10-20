@@ -88,7 +88,7 @@ if [ "$RESTORE_JOBS" -gt 4 ]; then RESTORE_JOBS=4; fi
 STAGING_DB="${DB}_restoring"
 drop_staging() {
     rm -rf "${FILESTORE:?}/$STAGING_DB" || true
-    $PSQL -d postgres -c "DROP DATABASE IF EXISTS $STAGING_DB WITH (FORCE);" >/dev/null
+    drop_db "$STAGING_DB"
 }
 abort_restore() {
     echo "ERROR: $1" >&2
@@ -147,7 +147,7 @@ if [ -d "$FILESTORE/$STAGING_DB" ]; then
         mv "$FILESTORE/$STAGING_DB" "$FILESTORE/$DB"
     fi
 fi
-$PSQL -d postgres -c "DROP DATABASE IF EXISTS $DB WITH (FORCE);" >/dev/null
+drop_db "$DB"
 $PSQL -d postgres -c "ALTER DATABASE $STAGING_DB RENAME TO $DB;" >/dev/null
 STAGING_OPEN=""
 echo "STATUS: db-ready ($DB)"

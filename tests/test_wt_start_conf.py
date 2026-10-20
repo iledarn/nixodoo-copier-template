@@ -152,6 +152,21 @@ def a_shared_test_server_overrides_from_dotenv():
 
 
 @case
+def every_database_drop_goes_through_drop_db():
+    # WITH (FORCE) errors for a non-superuser role as soon as an autovacuum worker
+    # sits on the DB (fresh restore on a shared server); only drop_db falls back
+    env = jinja2.Environment(trim_blocks=True, lstrip_blocks=True, keep_trailing_newline=True)
+    for name in ("wt-restore.sh.jinja", "wt-stop.sh.jinja"):
+        text = env.from_string(SRC.with_name(name).read_text()).render(**{**BASE, "project_dir_var": "PROJ_DIR"})
+        assert "WITH (FORCE)" not in text, name
+        assert "drop_db " in text, name
+    common = COMMON_SRC.read_text()
+    body = common[common.index("drop_db() {"):]
+    body = body[:body.index("\n}\n")]
+    assert body.index("WITH (FORCE)") < body.index("usename=current_user") < body.rindex("IF EXISTS $1;"), body
+
+
+@case
 def no_report_url_option():
     assert "report_url" not in conf(render())
 
