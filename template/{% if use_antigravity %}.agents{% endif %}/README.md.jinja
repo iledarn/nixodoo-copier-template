@@ -36,6 +36,12 @@ only points Antigravity at them. Change behaviour there, not here.
 | claude.ai connectors | `plugins/` | project-local MCP plugins |
 {% endif %}
 | workspace customizations UI | `plugins/workspace-inspector/` | `Overview → Plugins → Workspace Customizations` sidecar panel (mirrored to `~/.gemini/config/plugins/` by `hooks/claude_hook.py`) |
+{% if use_pipeline and custom_repo_name %}
+| `pipeline-gates` mod | `plugins/pipeline-gates/` + `hooks/claude_hook.py` | `Pipeline` sidecar panel (`sidecar://pipeline-gates/panel/`) + PreToolUse/PostToolUse gate enforcement |
+{% endif %}
+{% if custom_repo_name %}
+| `odoo-env-band` mod | `plugins/odoo-env/` | `Odoo Env & Worktrees` sidecar panel (`sidecar://odoo-env/panel/`) for PostgreSQL, git checkouts, and worktree envs |
+{% endif %}
 
 `hooks/claude_hook.py` answers a PreToolUse call it has no objection to with an empty stdout, as
 entire's own Antigravity hook does: `{}` reads as an empty decision and denies the call, and

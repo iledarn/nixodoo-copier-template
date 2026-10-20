@@ -153,6 +153,7 @@ function scanWorkspaceAgentsDir(wsPath) {
         path: pDir,
         isGlobal: false,
         disabled: Boolean(manifest.disabled),
+        hasSidecarUi: existsSync(join(pDir, 'sidecars')),
         mcpServers: mcpNames,
       });
 
@@ -1105,6 +1106,7 @@ const HTML = `<!DOCTYPE html>
                   <span>\${escapeHtml(p.displayName)}</span>
                   <span class="badge badge-ws">workspace</span>
                   <span class="badge \${p.disabled ? 'badge-muted' : 'badge-ok'}">\${p.disabled ? 'Disabled' : 'Active'}</span>
+                  \${p.hasSidecarUi ? '<span class="badge badge-purple">UI Panel</span>' : ''}
                   \${(p.mcpServers || []).map((m) => \`<span class="badge badge-purple">MCP: \${escapeHtml(m)}</span>\`).join('')}
                 </div>
               </div>

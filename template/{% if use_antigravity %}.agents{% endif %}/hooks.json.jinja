@@ -2,7 +2,7 @@
   "claude-hooks": {
     "PreToolUse": [
       {
-        "matcher": "run_command|write_to_file|replace_file_content|multi_replace_file_content|grep_search|view_file|list_dir|find_by_name",
+        "matcher": "run_command|write_file|edit_file|read_file|write_to_file|replace_file_content|multi_replace_file_content|grep_search|view_file|list_dir|find_by_name|invoke_subagent|send_message|call_mcp_tool",
         "hooks": [
           {
             "type": "command",
@@ -14,7 +14,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "write_to_file|replace_file_content|multi_replace_file_content",
+        "matcher": "run_command|write_file|edit_file|write_to_file|replace_file_content|multi_replace_file_content|invoke_subagent|call_mcp_tool",
         "hooks": [
           {
             "type": "command",
