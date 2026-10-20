@@ -19,7 +19,7 @@ jobs:
               -d project_name=ci-full -d odoo_version=16.0 -d use_queue_job=true
               -d custom_repo_pattern=git@github.com:acme/{}.git
               -d custom_repo_name=acme-addons
-              -d module_prefix=acme -d ticket_prefix=ACME
+              -d module_prefix=acme -d ticket_prefix=ACME -d extra_ticket_prefixes=AI
               -d status_mcp=teams -d tickets_mcp=odoo
               -d odoo_prod_url=https://odoo.example.com -d use_pipeline=true -d use_entire=true
               -d use_antigravity=true
@@ -66,6 +66,26 @@ jobs:
           shopt -s nullglob
           for f in /tmp/gen/.agents/*.json /tmp/gen/.agents/plugins/*/*.json /tmp/gen/.agents/plugins/*/sidecars/*/*.json; do python3 -m json.tool "$f" > /dev/null; done
           python3 tests/test_antigravity_hook.py
+      - name: Mods' tests (claude plugin test)
+        env:
+          # the binary is the test kit (claude-code/testing): bump it on purpose, not by drift
+          CLAUDE_CODE_VERSION: 2.1.299
+        run: |
+          shopt -s nullglob
+          mods=(/tmp/gen/.claude/skills/*/.claude-plugin)
+          if [ ${#mods[@]} -eq 0 ]; then echo "no mods in this render"; exit 0; fi
+          base=https://downloads.claude.ai/claude-code-releases/$CLAUDE_CODE_VERSION
+          curl -fsSL "$base/linux-x64/claude" -o /tmp/claude
+          echo "$(curl -fsSL "$base/manifest.json" | jq -r '.platforms["linux-x64"].checksum')  /tmp/claude" | sha256sum -c -
+          chmod +x /tmp/claude
+          rc=0
+          for m in "${mods[@]}"; do
+            mod=$(dirname "$m")
+            echo "::group::${mod##*/}"
+            (cd "$mod" && /tmp/claude plugin test .) || { rc=1; echo "::error::${mod##*/}: tests failed"; }
+            echo "::endgroup::"
+          done
+          exit $rc
       - name: nix flake check
         run: |
           cd /tmp/gen
