@@ -28,7 +28,8 @@ PORT_MAX={{ (odoo_major | int + 11) * 100 + 99 }}
 # Local postgres (odoo.conf: localhost:{{ postgres_port }}, odoo/odoo). The shared cluster is
 # already up via postgres{{ service_suffix }}.service — we never pg_ctl it, only create/drop DBs.
 export PGPASSWORD={{ db_password }}
-PSQL="psql -h localhost -p {{ postgres_port }} -U {{ db_user }}"
+# -X: a ~/.psqlrc (\timing on, say) would print into the output the scripts read back.
+PSQL="psql -X -h localhost -p {{ postgres_port }} -U {{ db_user }}"
 
 WT_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
