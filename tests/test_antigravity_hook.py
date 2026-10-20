@@ -46,13 +46,13 @@ SETTINGS = {
 }
 
 
-def project():
+def project(adapter_path=ADAPTER):
     root = tempfile.mkdtemp()
     os.makedirs(f"{root}/.agents/hooks")
     os.makedirs(f"{root}/.agents/plugins/workspace-inspector")
     os.makedirs(f"{root}/.claude/hooks")
     os.makedirs(f"{root}/home")
-    shutil.copy(ADAPTER, f"{root}/.agents/hooks/claude_hook.py")
+    shutil.copy(adapter_path, f"{root}/.agents/hooks/claude_hook.py")
     with open(f"{root}/.agents/plugins/workspace-inspector/plugin.json", "w") as fh:
         json.dump({"name": "workspace-inspector", "version": "1.0.0"}, fh)
     with open(f"{root}/.claude/settings.json", "w") as fh:
@@ -74,8 +74,10 @@ def twice(args):
 
 def call(root, mode, name, args, raw=None):
     payload = raw if raw is not None else json.dumps({"conversationId": "c1", "toolCall": {"name": name, "args": args}})
-    env = {k: v for k, v in os.environ.items() if k != "PROJECT_DIR"}
+    env = {k: v for k, v in os.environ.items() if k not in ("PROJECT_DIR", "ANTIGRAVITY_APP_DATA_DIR")}
     env["HOME"] = f"{root}/home"
+    env["ANTIGRAVITY_APP_DATA_DIR"] = f"{root}/home/.gemini/antigravity"
+    env["ANTIGRAVITY_CONVERSATION_ID"] = "c1"
     done = subprocess.run(
         [sys.executable, f"{root}/.agents/hooks/claude_hook.py", mode],
         input=payload, capture_output=True, text=True, env=env, check=False,
@@ -84,9 +86,23 @@ def call(root, mode, name, args, raw=None):
     return done.stdout
 
 
+def cli(root, *argv):
+    env = {k: v for k, v in os.environ.items() if k not in ("PROJECT_DIR", "ANTIGRAVITY_APP_DATA_DIR")}
+    env["HOME"] = f"{root}/home"
+    env["ANTIGRAVITY_APP_DATA_DIR"] = f"{root}/home/.gemini/antigravity"
+    env["ANTIGRAVITY_CONVERSATION_ID"] = "c1"
+    return subprocess.run(
+        [sys.executable, f"{root}/.agents/hooks/claude_hook.py", "pipeline-gate", *argv],
+        capture_output=True, text=True, env=env, check=False,
+    )
+
+
 def main():
-    root = project()
+    adapter_path = sys.argv[1] if len(sys.argv) > 1 else ADAPTER
+    root = project(adapter_path)
     core, mine = f"{root}/src/core/models.py", f"{root}/src/mine/models.py"
+    wt_code = f"{root}/.worktrees/kio-1/mod/models.py"
+    wt_doc = f"{root}/.worktrees/kio-1/mod/README.rst"
     meta = f"{root}/.entire/metadata/t.json"
     # (want, label, mode, tool, args); want: "" silent, "deny" a denial, "{}" for post
     cases = [
@@ -96,7 +112,10 @@ def main():
         ("deny", "guard blocks a read-only edit", "pre", "replace_file_content", {"TargetFile": core}),
         ("deny", "guard blocks a read-only edit, args encoded twice", "pre", "write_to_file", twice({"TargetFile": core, "Overwrite": True})),
         ("", "an allowed edit passes silently", "pre", "write_to_file", twice({"TargetFile": mine, "Overwrite": True})),
+        ("", "edit_file uses Path and passes when allowed", "pre", "edit_file", {"Path": mine}),
+        ("deny", "edit_file uses Path and blocks read-only", "pre", "edit_file", {"Path": core}),
         ("deny", "permissions.deny covers view_file", "pre", "view_file", {"AbsolutePath": meta}),
+        ("deny", "permissions.deny covers read_file", "pre", "read_file", {"Path": meta}),
         ("deny", "permissions.deny covers view_file, args encoded twice", "pre", "view_file", twice({"AbsolutePath": meta})),
         ("deny", "permissions.deny covers a command naming the path", "pre", "run_command", {"CommandLine": "cat .entire/metadata/t.json"}),
         ("", "a tool with no Claude twin passes silently", "pre", "invoke_subagent", {"Subagents": "[]"}),
@@ -120,6 +139,50 @@ def main():
     ok = os.path.isfile(f"{root}/home/.gemini/config/plugins/workspace-inspector/plugin.json")
     failures += not ok
     print(f"  {'ok  ' if ok else 'FAIL'} workspace-inspector sidecar plugin syncs into ~/.gemini/config/plugins/")
+
+    # pipeline-gates enforcement tests
+    cli(root, "start", "KIO-1")
+    pipeline_cases_before = [
+        ("deny", "pipeline-gates blocks dev subagent before status & grill", "pre", "invoke_subagent", {"TypeName": "dev"}),
+        ("deny", "pipeline-gates blocks worktree edit before status & grill", "pre", "edit_file", {"Path": wt_code}),
+        ("{}", "teams-mcp post opens status gate", "post", "call_mcp_tool", {"ServerName": "teams-mcp", "ToolName": "send_chat_message"}),
+        ("deny", "pipeline-gates still blocks dev subagent while grill closed", "pre", "invoke_subagent", {"TypeName": "dev"}),
+    ]
+    for want, label, mode, tool, args in pipeline_cases_before:
+        out = call(root, mode, tool, args).strip()
+        got = "deny" if out.startswith('{"decision": "deny"') else out
+        ok = got == want
+        failures += not ok
+        print(f"  {'ok  ' if ok else 'FAIL'} {label}" + ("" if ok else f": want {want!r}, got {out!r}"))
+
+    cli(root, "open", "grill", "confirmed")
+    pipeline_cases_after_grill = [
+        ("", "pipeline-gates allows dev subagent once status & grill open", "pre", "invoke_subagent", {"TypeName": "dev"}),
+        ("", "pipeline-gates allows worktree code edit once status & grill open", "pre", "edit_file", {"Path": wt_code}),
+        ("{}", "worktree code edit advances seq in post", "post", "edit_file", {"Path": wt_code}),
+        ("deny", "pipeline-gates blocks gh pr create before qc pass", "pre", "run_command", {"CommandLine": "gh pr create --title test"}),
+    ]
+    for want, label, mode, tool, args in pipeline_cases_after_grill:
+        out = call(root, mode, tool, args).strip()
+        got = "deny" if out.startswith('{"decision": "deny"') else out
+        ok = got == want
+        failures += not ok
+        print(f"  {'ok  ' if ok else 'FAIL'} {label}" + ("" if ok else f": want {want!r}, got {out!r}"))
+
+    cli(root, "qc-verdict", "pass", "review and tests green")
+    pipeline_cases_after_qc = [
+        ("{}", "worktree doc edit does not invalidate qc pass", "post", "edit_file", {"Path": wt_doc}),
+        ("", "pipeline-gates allows gh pr create after qc pass and doc edit", "pre", "run_command", {"CommandLine": "gh pr create --title test"}),
+        ("{}", "worktree code edit invalidates qc pass", "post", "edit_file", {"Path": wt_code}),
+        ("deny", "pipeline-gates blocks gh pr create after new code edit", "pre", "run_command", {"CommandLine": "gh pr create --title test"}),
+    ]
+    for want, label, mode, tool, args in pipeline_cases_after_qc:
+        out = call(root, mode, tool, args).strip()
+        got = "deny" if out.startswith('{"decision": "deny"') else out
+        ok = got == want
+        failures += not ok
+        print(f"  {'ok  ' if ok else 'FAIL'} {label}" + ("" if ok else f": want {want!r}, got {out!r}"))
+
     shutil.rmtree(root)
     print("PASS" if not failures else f"{failures} FAILED")
     return 1 if failures else 0

@@ -53,14 +53,17 @@ Skills and agents name Claude Code tools. Use the Antigravity equivalent:
   in an ssh + odoo shell read the skill did not ask for.
 {% endif %}
 {% if use_pipeline and custom_repo_name %}
-- **pipeline-gates** (`mcp__pipeline-gates__*`): a Claude Code mod. Hold its three gates by hand,
-  as the `pipeline` skill describes them: no `dev` agent and no worktree edit before
+- **pipeline-gates** (`mcp__pipeline-gates__*`): enforced here by `.agents/hooks/claude_hook.py`
+  and the `Pipeline` sidecar panel (`.agents/plugins/pipeline-gates/`, `[Pipeline](sidecar://pipeline-gates/panel/)`).
+  Use `python3 .agents/hooks/claude_hook.py pipeline-gate phase <0..7> [TASK]` (or the panel UI) to
+  advance phases and `pipeline-gate qc-verdict <pass|blocking> <summary>` to record the QC verdict:
+  no `dev` agent and no worktree edit before
 {% if status_mcp == 'teams' %}
   the Teams status is sent and
 {% endif %}
-  the user confirmed the grill summary in words; no `gh pr create` before a `review` agent and a
+  the grill gate is confirmed; no `gh pr create` before a `review` agent and a
   green test run (more than 0 tests) since the last code change; a fourth fix round only when the
-  user grants it, each round to a fresh `dev` agent.
+  user grants `+3 rounds` in the panel, each round to a fresh `dev` agent.
 {% endif %}
 {% if prod_ssh_host and custom_repo_name %}
 - **deploy-watch** (`mcp__deploy-watch__schedule_check`): schedule the T+60 re-check with the
@@ -70,8 +73,11 @@ Skills and agents name Claude Code tools. Use the Antigravity equivalent:
 - **Claude in Chrome / Claude Browser**: use the browser subagent (`/browser`) for UI checks and
   the 375 px phone check.
 {% if custom_repo_name %}
-- **Status line, odoo-env-band, agent memory** (`.claude/agent-memory/`): Claude UI only. For envs,
-  `bash .claude/skills/worktree-env/scripts/wt-list.sh`. Never write into `.claude/agent-memory/`.
+- **odoo-env-band**: ported as the `Odoo Env & Worktrees` sidecar panel (`.agents/plugins/odoo-env/`,
+  `[Odoo Env & Worktrees](sidecar://odoo-env/panel/)`), or from the CLI via
+  `bash .claude/skills/worktree-env/scripts/wt-list.sh`.
+- **Status line, agent memory** (`.claude/agent-memory/`): Claude UI only. Never write into
+  `.claude/agent-memory/`.
 {% else %}
 - **Status line, agent memory** (`.claude/agent-memory/`): Claude UI only. Never write into
   `.claude/agent-memory/`.
