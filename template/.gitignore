@@ -39,3 +39,6 @@ result
 # types and a tsconfig extending them. Regenerated per build, never committed.
 .claude/skills/*/.claude-plugin/types/
 .claude/skills/*/tsconfig.json
+
+# The backups /settings-sync apply leaves beside the project's local settings before it writes them.
+.claude/settings.local.json.bak-*
