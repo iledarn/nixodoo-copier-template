@@ -11,6 +11,7 @@ with an answer set and reads the [options] block back.
 
 The wt-test.sh cases run the rendered wrapper with psql and odoo stubbed, plus
 its module-state query against a live PostgreSQL when one answers (else skip).
+The Claude-worktree cases run the rendered wt-start.sh up to its bootstrap step.
 """
 
 import itertools
@@ -310,6 +311,52 @@ def every_line_of_the_block_is_one_option_or_a_section():
         block = re.search(r'<<EOF\n(.*?)\nEOF\n', render(**answers), re.S).group(1).splitlines()
         assert block[0] == "[options]", block[0]
         assert all(re.fullmatch(r"[a-z_]+ = \S.*|\[[a-z_]+\]|", line) for line in block[1:]), (answers, block)
+
+
+
+def run_wt_start_from(where, allow=False):
+    """Run the rendered wt-start.sh for slug `x` with the cwd at `where` under the project.
+
+    wt-bootstrap.sh is a stub that exits 7, so a run that got past the Claude-worktree
+    check stops there. Returns (exit code, stdout+stderr).
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        scripts, cwd = root / "scripts", root / where
+        for d in (scripts, cwd):
+            d.mkdir(parents=True, exist_ok=True)
+        for src in (SRC, SRC.with_name("wt-common.sh.jinja")):
+            (scripts / src.name.removesuffix(".jinja")).write_text(render_script(src))
+        (scripts / "wt-bootstrap.sh").write_text("echo BOOTSTRAP; exit 7\n")
+        env = {**os.environ, "HOME": tmp, "WT_TEST_PROJECT_DIR": tmp}
+        env.pop("WT_ALLOW_CLAUDE_WORKTREE", None)
+        if allow:
+            env["WT_ALLOW_CLAUDE_WORKTREE"] = "1"
+        proc = subprocess.run(["bash", str(scripts / "wt-start.sh"), "x"], cwd=cwd,
+                              capture_output=True, text=True, env=env)
+        return proc.returncode, proc.stdout + proc.stderr
+
+
+@case
+def a_claude_worktree_session_is_refused_before_anything_is_made():
+    # the desktop app's worktree guard refuses Edit/Write in the base checkout, and the
+    # env's code worktree would be there: the session would get an env it cannot edit
+    rc, out = run_wt_start_from(".claude/worktrees/w/src")
+    assert rc == 4 and "BOOTSTRAP" not in out, (rc, out)
+    assert "Claude worktree" in out and "/.worktrees/x" in out and "WT_ALLOW_CLAUDE_WORKTREE=1" in out, out
+
+
+@case
+def the_base_checkout_and_its_addons_worktrees_go_through():
+    for where in (".", "src/acme-addons", ".worktrees/x", ".claude/skills"):
+        rc, out = run_wt_start_from(where)
+        assert (rc, out.strip()) == (7, "BOOTSTRAP"), (where, rc, out)
+
+
+@case
+def the_override_lets_a_claude_worktree_through():
+    rc, out = run_wt_start_from(".claude/worktrees/w", allow=True)
+    assert (rc, out.strip()) == (7, "BOOTSTRAP"), (rc, out)
 
 
 if __name__ == "__main__":
