@@ -1,8 +1,10 @@
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync, watchFile } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SidecarApp } from 'sidecar_sdk';
+
+watchFile(fileURLToPath(import.meta.url), { interval: 1000 }, () => process.exit(1));
 
 const HOME = homedir();
 const GEMINI_CONFIG_DIR = join(HOME, '.gemini', 'config');
@@ -329,6 +331,116 @@ function scanWorkspaceAgentsDir(wsPath) {
   return result;
 }
 
+async function buildTelemetry(activeUris, lsTrajRes, lsQuotaRes, lsModelsRes) {
+  const modelMap = new Map();
+  for (const m of lsModelsRes?.clientModelConfigs || []) {
+    if (m.modelOrAlias?.model && m.label) modelMap.set(m.modelOrAlias.model, m.label);
+    if (m.modelId && m.label) modelMap.set(m.modelId, m.label);
+  }
+
+  // 1. Find active trajectory for this workspace
+  const summariesObj = lsTrajRes?.trajectorySummaries || {};
+  const allTrajs = Object.entries(summariesObj).map(([cascadeId, t]) => {
+    const wsUris = [
+      ...(t.workspaces || []).map((w) => w.workspaceFolderAbsoluteUri).filter(Boolean),
+      ...(t.trajectoryMetadata?.workspaceUris || []),
+    ];
+    return {
+      cascadeId,
+      title: t.annotations?.title || t.summary || cascadeId.slice(0, 8),
+      stepCount: t.stepCount || 0,
+      status: String(t.status || '').replace(/^CASCADE_RUN_STATUS_/, ''),
+      lastModifiedTime: t.lastModifiedTime || t.annotations?.lastUserViewTime || '',
+      wsUris,
+    };
+  });
+
+  const matchingTrajs = allTrajs.filter(
+    (t) => activeUris.length === 0 || t.wsUris.some((u) => activeUris.includes(u))
+  );
+  const pool = matchingTrajs.length > 0 ? matchingTrajs : allTrajs;
+  pool.sort((a, b) => new Date(b.lastModifiedTime || 0) - new Date(a.lastModifiedTime || 0));
+  const activeTraj = pool[0] || null;
+
+  let sessionContext = null;
+  if (activeTraj) {
+    const genRes = await lsrpc('GetCascadeTrajectoryGeneratorMetadata', {
+      cascadeId: activeTraj.cascadeId,
+    });
+    const genList = genRes?.generatorMetadata || [];
+    let lastCw = null;
+    let lastChat = null;
+    for (let i = genList.length - 1; i >= 0; i--) {
+      const cm = genList[i]?.chatModel;
+      const cw = cm?.chatStartMetadata?.contextWindowMetadata;
+      if (cw && (cw.estimatedTokensUsed || cw.maxContextTokens)) {
+        lastCw = cw;
+        lastChat = cm;
+        break;
+      }
+    }
+    const usedTokens = Number(
+      lastCw?.estimatedTokensUsed || lastCw?.tokenBreakdown?.totalTokens || 0
+    );
+    const maxTokens = Number(lastCw?.maxContextTokens || 256000);
+    const modelEnum = lastChat?.model || '';
+    const modelLabel =
+      modelMap.get(modelEnum) || lastChat?.responseModel || modelEnum || 'Active Model';
+    sessionContext = {
+      cascadeId: activeTraj.cascadeId,
+      title: activeTraj.title,
+      stepCount: activeTraj.stepCount,
+      status: activeTraj.status,
+      usedTokens,
+      maxTokens,
+      usedPercent: maxTokens > 0 ? Math.min(100, (usedTokens / maxTokens) * 100) : 0,
+      modelLabel,
+    };
+  }
+
+  // 2. Parse 5h and Weekly quota windows from RetrieveUserQuotaSummary
+  const groups = lsQuotaRes?.response?.groups || [];
+  const fiveHour = [];
+  const weekly = [];
+
+  for (const g of groups) {
+    const gName = g.displayName || 'Models';
+    const shortLabel = gName.toLowerCase().includes('gemini')
+      ? 'Gemini'
+      : gName.toLowerCase().includes('claude')
+        ? 'Claude / GPT'
+        : gName;
+    for (const b of g.buckets || []) {
+      const rem = typeof b.remainingFraction === 'number' ? b.remainingFraction : 0;
+      const remainingPercent = Math.max(0, Math.min(100, rem * 100));
+      const usedPercent = Math.max(0, Math.min(100, (1 - rem) * 100));
+      const entry = {
+        bucketId: b.bucketId || '',
+        groupName: gName,
+        shortLabel,
+        window: b.window || '',
+        remainingFraction: rem,
+        remainingPercent,
+        usedPercent,
+        resetTime: b.resetTime || '',
+      };
+      if (b.window === '5h' || String(b.bucketId).endsWith('-5h')) {
+        fiveHour.push(entry);
+      } else if (b.window === 'weekly' || String(b.bucketId).endsWith('-weekly')) {
+        weekly.push(entry);
+      }
+    }
+  }
+
+  return {
+    sessionContext,
+    quotaWindows: {
+      fiveHour,
+      weekly,
+    },
+  };
+}
+
 async function inspectWorkspace(requestedUris = []) {
   const projects = loadKnownProjects();
   let activeUris = Array.isArray(requestedUris) && requestedUris.length > 0 ? requestedUris : [];
@@ -339,12 +451,18 @@ async function inspectWorkspace(requestedUris = []) {
   const wsPaths = activeUris.map(uriToPath).filter(Boolean);
   const primaryPath = wsPaths[0] || process.cwd();
 
-  const [lsPluginsRes, lsMcpRes] = await Promise.all([
+  const [lsPluginsRes, lsMcpRes, lsTrajRes, lsQuotaRes, lsModelsRes] = await Promise.all([
     lsrpc('GetAllPlugins', { workspaceUris: activeUris }),
     lsrpc('GetMcpServerStates', {}),
+    lsrpc('GetAllCascadeTrajectories', {}),
+    lsrpc('RetrieveUserQuotaSummary', {}),
+    lsrpc('GetCascadeModelConfigData', {}),
   ]);
 
-  const scanned = scanWorkspaceAgentsDir(primaryPath);
+  const [scanned, telemetry] = await Promise.all([
+    Promise.resolve(scanWorkspaceAgentsDir(primaryPath)),
+    buildTelemetry(activeUris, lsTrajRes, lsQuotaRes, lsModelsRes),
+  ]);
 
   // Enrich workspace plugins with live LS state (disabled flag, etc.)
   const lsPlugins = lsPluginsRes?.plugins || [];
@@ -395,6 +513,7 @@ async function inspectWorkspace(requestedUris = []) {
     activeWorkspaceName: basename(primaryPath),
     activeWorkspaceUris: activeUris,
     projects,
+    telemetry,
     workspacePlugins: scanned.plugins,
     globalPlugins,
     mcpServers: scanned.mcpServers,
@@ -499,6 +618,92 @@ const HTML = `<!DOCTYPE html>
     button:hover {
       background: var(--wi-card-hover);
       border-color: rgba(148, 163, 184, 0.4);
+    }
+    .telemetry-wrap {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .telemetry-card {
+      background: var(--wi-card);
+      border: 1px solid var(--wi-border);
+      border-radius: 8px;
+      padding: 9px 11px;
+    }
+    .telemetry-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .tel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      margin-bottom: 5px;
+      flex-wrap: wrap;
+    }
+    .tel-title {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--wi-text-sec);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .tel-val {
+      font-size: 12.5px;
+      font-weight: 700;
+      color: var(--wi-fg);
+      font-variant-numeric: tabular-nums;
+    }
+    .tel-sub {
+      font-size: 11px;
+      color: var(--wi-text-dim);
+      font-variant-numeric: tabular-nums;
+    }
+    .bar-track {
+      width: 100%;
+      height: 6px;
+      background: rgba(15, 23, 42, 0.75);
+      border-radius: 999px;
+      overflow: hidden;
+      margin: 4px 0;
+      border: 1px solid rgba(148, 163, 184, 0.14);
+    }
+    .bar-fill {
+      height: 100%;
+      border-radius: 999px;
+      transition: width 0.25s ease;
+    }
+    .quota-row {
+      margin-top: 6px;
+    }
+    .quota-row + .quota-row {
+      margin-top: 8px;
+      padding-top: 7px;
+      border-top: 1px dashed rgba(148, 163, 184, 0.16);
+    }
+    .quota-row-top {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 4px;
+      font-size: 11.5px;
+      flex-wrap: wrap;
+    }
+    .quota-model {
+      font-weight: 600;
+      color: var(--wi-fg);
+    }
+    .quota-nums {
+      font-variant-numeric: tabular-nums;
+      color: var(--wi-text-sec);
+      font-size: 11px;
     }
     .stats {
       display: grid;
@@ -667,6 +872,7 @@ const HTML = `<!DOCTYPE html>
     </div>
   </div>
 
+  <div id="telemetry-bar" class="telemetry-wrap"></div>
   <div class="stats" id="stats-bar"></div>
   <div id="content">Loading workspace customizations...</div>
 
@@ -675,6 +881,111 @@ const HTML = `<!DOCTYPE html>
     let activeTab = 'all';
     let searchQuery = '';
     let selectedUris = [];
+
+    function formatTokens(n) {
+      const num = Number(n || 0);
+      if (num >= 1000000) return (num / 1000000).toFixed(2) + 'M';
+      if (num >= 1000) return (num / 1000).toFixed(1) + 'k';
+      return String(num);
+    }
+
+    function formatResetTime(iso) {
+      if (!iso) return '';
+      const diffMs = new Date(iso).getTime() - Date.now();
+      if (!Number.isFinite(diffMs) || diffMs <= 0) return 'now';
+      const totalMins = Math.ceil(diffMs / 60000);
+      const days = Math.floor(totalMins / (60 * 24));
+      const hours = Math.floor((totalMins % (60 * 24)) / 60);
+      const mins = totalMins % 60;
+      if (days > 0) return days + 'd ' + hours + 'h';
+      if (hours > 0) return hours + 'h ' + mins + 'm';
+      return mins + 'm';
+    }
+
+    function barColorForUsed(usedPct) {
+      if (usedPct >= 85) return '#f87171';
+      if (usedPct >= 65) return '#fbbf24';
+      return '#60a5fa';
+    }
+
+    function renderTelemetry() {
+      const el = document.getElementById('telemetry-bar');
+      const tel = currentState?.telemetry;
+      if (!el || !tel) {
+        if (el) el.innerHTML = '';
+        return;
+      }
+
+      const ctx = tel.sessionContext;
+      const fiveHour = tel.quotaWindows?.fiveHour || [];
+      const weekly = tel.quotaWindows?.weekly || [];
+
+      let ctxHtml = '';
+      if (ctx) {
+        const usedPct = Number(ctx.usedPercent || 0);
+        const freeTokens = Math.max(0, (ctx.maxTokens || 0) - (ctx.usedTokens || 0));
+        const color = barColorForUsed(usedPct);
+        ctxHtml = \`
+          <div class="telemetry-card">
+            <div class="tel-head">
+              <div class="tel-title">
+                <span>Session Context</span>
+                <span class="badge badge-ws">\${escapeHtml(ctx.modelLabel)}</span>
+                <span class="badge badge-muted">Step \${escapeHtml(ctx.stepCount)}</span>
+              </div>
+              <div class="tel-val">\${formatTokens(ctx.usedTokens)} / \${formatTokens(ctx.maxTokens)} <span style="color:\${color};">(\${usedPct.toFixed(1)}%)</span></div>
+            </div>
+            <div class="bar-track">
+              <div class="bar-fill" style="width:\${Math.max(1, usedPct).toFixed(1)}%;background:\${color};"></div>
+            </div>
+            <div style="display:flex;justify-content:space-between;margin-top:3px;" class="tel-sub">
+              <span>Used: \${ ctx.usedTokens.toLocaleString() } tok</span>
+              <span>Free: \${ freeTokens.toLocaleString() } tok (\${(100 - usedPct).toFixed(1)}%)</span>
+            </div>
+          </div>\`;
+      }
+
+      const renderWindowCard = (title, buckets) => {
+        if (!buckets || buckets.length === 0) {
+          return \`
+            <div class="telemetry-card">
+              <div class="tel-head"><div class="tel-title">\${escapeHtml(title)}</div></div>
+              <div class="tel-sub">No quota data</div>
+            </div>\`;
+        }
+        return \`
+          <div class="telemetry-card">
+            <div class="tel-head">
+              <div class="tel-title">\${escapeHtml(title)}</div>
+            </div>
+            \${buckets
+              .map((b) => {
+                const usedPct = Number(b.usedPercent || 0);
+                const remPct = Number(b.remainingPercent || 0);
+                const color = barColorForUsed(usedPct);
+                const resetIn = formatResetTime(b.resetTime);
+                return \`
+                  <div class="quota-row">
+                    <div class="quota-row-top">
+                      <span class="quota-model">\${escapeHtml(b.shortLabel)}</span>
+                      <span class="quota-nums"><strong style="color:var(--wi-fg);">\${usedPct.toFixed(1)}%</strong> used · \${remPct.toFixed(0)}% left\${resetIn ? \` · ↻ \${escapeHtml(resetIn)}\` : ''}</span>
+                    </div>
+                    <div class="bar-track">
+                      <div class="bar-fill" style="width:\${Math.max(usedPct > 0 ? 1.5 : 0, usedPct).toFixed(1)}%;background:\${color};"></div>
+                    </div>
+                  </div>\`;
+              })
+              .join('')}
+          </div>\`;
+      };
+
+      el.innerHTML = \`
+        \${ctxHtml}
+        <div class="telemetry-grid">
+          \${renderWindowCard('5-Hour Window', fiveHour)}
+          \${renderWindowCard('Weekly Window', weekly)}
+        </div>\`;
+    }
 
     async function loadData(uris) {
       const res = await window.sidecar.fetch('/api/inspect', {
@@ -729,6 +1040,8 @@ const HTML = `<!DOCTYPE html>
       if (!currentState) return;
       document.getElementById('ws-badge').textContent =
         currentState.activeWorkspaceName + ' · .agents/';
+
+      renderTelemetry();
 
       const totalTools = (currentState.mcpServers || []).reduce(
         (acc, s) => acc + (s.tools?.length || 0),
@@ -1001,6 +1314,7 @@ const HTML = `<!DOCTYPE html>
         selectedUris = initialUris;
       }
       await loadData(selectedUris);
+      setInterval(() => loadData(selectedUris), 15000);
     })();
   </script>
 </body>
