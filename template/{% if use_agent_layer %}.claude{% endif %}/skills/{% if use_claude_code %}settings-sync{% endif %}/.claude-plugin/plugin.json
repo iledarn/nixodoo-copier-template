@@ -1,0 +1,8 @@
+{
+  "name": "settings-sync",
+  "version": "0.3.0",
+  "description": "/settings-sync: show, then apply, what the team's Claude settings (the template's layer and this project's own) add to ~/.claude/settings.json and the checkout's .claude/settings.local.json, on a new laptop or for a new teammate",
+  "author": {
+    "name": "Mark Okolov"
+  }
+}

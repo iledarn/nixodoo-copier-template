@@ -1,0 +1,34 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:www.odoo.com)",
+      "Read(/@HOME@/.claude/**)",
+      "Edit(@HOME@/.claude/projects/@PROJECT_SLUG@/memory/**)",
+      "Read(@HOME@/.claude/projects/@PROJECT_SLUG@/memory/**)",
+      "Bash(systemctl --user status postgres{{ service_suffix }}.service)",
+      "Read(//tmp/**)",
+      "WebFetch(domain:github.com)",
+      "Read(/@HOME@/Downloads/**)",
+      "WebSearch",
+      "Bash(gh pr *)"
+    ],
+    "additionalDirectories": [
+      "@HOME@/.claude/projects/@PROJECT_SLUG@/memory",
+      "/tmp"
+    ]
+  },
+{% if use_kb %}
+  "autoMemoryEnabled": false,
+{% endif %}
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Read-only shell commands are approved without asking anywhere under the project root @PROJECT@ (including src/, .worktrees/ and .claude/), under the Claude memory directory @HOME@/.claude/projects/@PROJECT_SLUG@/memory, and under /tmp: cat, head, tail, sed -n, grep, rg, ls, find, wc, diff, stat, file, jq, awk/python3 that only print, git log/show/diff/status/blame/rev-parse/for-each-ref. This holds when the command first changes directory into one of those trees (cd /abs/dir && cmd, cd /abs/dir; cmd, or (cd /abs/dir && cmd)) and then names files relatively: resolve the relative names against the cd target, which is always an absolute path in this project.{% if use_entire %} The one read exclusion is any path containing .entire/metadata/ (session transcripts); a command naming that path is not covered.{% endif %}"
+    ]{% if custom_repo_name %},
+    "environment": [
+      "$defaults",
+      "**Hard guards already in place (PreToolUse hooks, exit 2 = blocked):** guard-bash.sh refuses recursive deletion of the filesystem root, the home directory or the current directory, force pushes, hard resets, git clean, and database drops; guard-readonly.sh refuses Edit/Write under src/ outside src/{{ custom_repo_name }} (Odoo core and OCA are read-only). Deletions and edits inside the project root therefore cannot reach those cases and need no extra confirmation."
+    ]{% endif %}
+
+  }
+}

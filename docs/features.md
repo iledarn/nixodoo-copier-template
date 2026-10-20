@@ -48,6 +48,10 @@ The full inventory behind the summary in [the README](../README.md#what-it-gener
   session works in (env repo, addons, its worktree env: branch, changes, ahead/behind, port and
   address) after the postgres cluster's state, a worktree's port and state beside its label and a
   bar between each two groups;
+  **settings-sync**, `/settings-sync` then `/settings-sync apply`: the team's Claude settings
+  (user and project-local) added to a machine's, never overwriting, from two layers, the template's
+  (`.claude/skills/settings-sync/baseline/`) and the project's own (`.claude/settings-sync/`, written
+  by its maintainer's `sync.py save`), with machine paths and claude.ai connector ids filled in;
   **deploy-watch**, the deploy skill's T+60 re-check as a timer that survives a restart,
   with a countdown, run-now and cancel; **redact-secrets**, passwords, tokens, keys and URL
   credentials masked in tool output before the model reads it and before the transcript
