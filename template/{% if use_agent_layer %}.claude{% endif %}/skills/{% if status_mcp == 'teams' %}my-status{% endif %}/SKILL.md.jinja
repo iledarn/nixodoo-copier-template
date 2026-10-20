@@ -152,10 +152,10 @@ guard (step 8).
      task, bump its estimate to match.
 7. **Apply + report.** Rebalance-on-scope-growth is durably authorized by the
    user, so when **invoked by the pipeline** write the changes and then report
-   the before→after diff (one `execute` `write` per task, or batched by
+   the before→after diff (one `write` per task, or batched by
    identical vals) — do not block the run on a per-time confirmation. When
    invoked **manually** (`rebalance` arg), show the proposed before→after table
-   first and apply on the user's go. Writes use the connector's `execute` with the
+   first and apply on the user's go. Writes use the connector's `write` with the
    quiet context `{"mail_create_nolog": true, "mail_create_nosubscribe": true,
    "mail_auto_subscribe_no_notify": true, "tracking_disable": true}`
    (`date_deadline` is tracked).
@@ -172,8 +172,8 @@ guard (step 8).
   `fields_get`. The **single** write path is **rebalance**, and only within its
   scope guard (rebalance step 8): `planned_date_start` / `planned_date_end` /
   `date_deadline` / `planned_hours` / `tshirt_estimate` on the user's **own**
-  open assigned tasks, via `execute` with the quiet + `tracking_disable`
-  context. Nothing else here writes.
+  open assigned tasks, via `write` with the quiet + `tracking_disable`
+  context (`execute` only as the `odoo-tickets` fallback). Nothing else here writes.
 {% if not use_kb %}
   (Ticket mirroring on state-item open/close is a separate flow — see the
   behavior protocol's "State ↔ Odoo tickets" section.)

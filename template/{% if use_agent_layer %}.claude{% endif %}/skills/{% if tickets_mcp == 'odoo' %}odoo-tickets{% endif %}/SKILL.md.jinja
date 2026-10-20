@@ -8,22 +8,40 @@ argument-hint: "[{{ ticket_prefix }}-key or task id] [action]"
 
 - All prod task operations go through the **Odoo connector** — the claude.ai
   connector to production, signed in as the developer (their own account and
-  rights) — never claude-in-chrome. Its tools are `search_read`, `read`, `execute`,
-  `create`, `write`, `get_connection_status`; there is no connect step and no
-  profile to restore. If it is missing or asks to authenticate, tell the user to
-  (re)connect it in their Claude settings — never ask for an Odoo password or API key.
+  rights) — never claude-in-chrome. Its tools are `search_read`, `read`,
+  `read_group`, `create`, `write`, `message_post`, `begin_upload`, `execute`,
+  `get_connection_status`; there is no connect step and no profile to restore.
+  If it is missing or asks to authenticate, tell the user to (re)connect it in
+  their Claude settings — never ask for an Odoo password or API key.
 - Identity (login, uid, default project, stages, chat) comes from memory node
   `user_identity` — read it first, never hardcode a person. `get_connection_status`
   says who the connector is signed in as.
 
 ## Connection & context flags
 
-- **Every create/write goes through `execute`** (the plain create/write tools
-  can't pass context) with context:
+- **Every create/write/note goes through the plain tools — `create`, `write`,
+  `message_post` — with the quiet context**, written `<quiet>` below:
   `{"mail_create_nolog": true, "mail_create_nosubscribe": true,
   "mail_auto_subscribe_no_notify": true}` — add `"tracking_disable": true`
-  on stage moves. Why: the assign-notify guard from PR 770 keys off
-  `mail_auto_subscribe_no_notify`, and a ticket write is plumbing, not news.
+  on stage moves and other tracked fields. Why: the assign-notify guard from
+  PR 770 keys off `mail_auto_subscribe_no_notify`, and a ticket write is
+  plumbing, not news.
+- **Not through `execute`.** It runs any method on any model, so it is
+  confirmed on every call (an organisation can make that mandatory), and a
+  plain write sent through it stops on a prompt. The plain tools take a
+  `context` limited to the chatter-quieting keys (`mail_create_nolog`,
+  `mail_create_nosubscribe`, `mail_auto_subscribe_no_notify`, `mail_notrack`,
+  `tracking_disable`, `lang`, `tz`) and refuse any other; `execute` stays for
+  real method calls and for a context key outside that set.
+- **Fallback — no `context` on `write`:** a session opened before the
+  connector's tool list refreshed (or an older connector) shows `write` and
+  `create` without a `context` parameter and has no `message_post`. Then, and
+  only then, send the same call through `execute`:
+  `write(m, ids, vals, context=c)` → `execute(m, "write", [ids, vals], {"context": c})`;
+  `create(m, vals, context=c)` → `execute(m, "create", [vals], {"context": c})`
+  (answers the bare id); `message_post(m, id, body, attachment_ids=a, context=c)` →
+  `execute(m, "message_post", [[id]], {"body": body, "message_type": "comment",
+  "subtype_xmlid": "mail.mt_note", "attachment_ids": a, "context": c})`.
 - **Cost rule:** never include `description` / `solution` / any Html field in
   a multi-record `search_read` — prod descriptions embed base64 images
   (megabytes). Read heavy fields for ONE record at a time, explicit lists only.
@@ -72,11 +90,10 @@ answers to `answers`. Don't let a clarification live only in the chat. Use
 parallel numbered lists so each pair lines up by position:
 
 ```
-execute("project.task", "write", [[<id>], {
+write(model="project.task", ids=[<id>], values={
   "questions": "<ol><li>Which warehouses are in scope?</li><li>Block or only warn on conflict?</li></ol>",
   "answers":   "<ol><li>Only the Manila DC.</li><li>Hard block.</li></ol>"
-}], {"context": {"mail_create_nolog": true, "mail_create_nosubscribe": true,
-                 "mail_auto_subscribe_no_notify": true}})
+}, context=<quiet>)
 ```
 
 **Append, don't overwrite:** if the fields already hold an earlier round,
@@ -113,7 +130,7 @@ genuinely new. Tags are an index, not free-text labels.
 
 ```
 hit = search_read("project.tags", [["name", "=ilike", "Cash Flow Forecast"]], ["id", "name"])
-tag_id = hit[0].id  if hit  else  execute("project.tags", "create", [{"name": "Cash Flow Forecast", "color": 4}])
+tag_id = hit[0].id  if hit  else  create(model="project.tags", values={"name": "Cash Flow Forecast", "color": 4})["id"]
 ```
 
 **Write tags** — on create pass the whole set, `"tag_ids": [[6, 0, [<id1>, <id2>]]]`.
@@ -121,32 +138,27 @@ To add a tag to an existing ticket non-destructively (keeps current tags), use
 `(4, id)` with the quiet context:
 
 ```
-execute("project.task", "write", [[<task_id>], {"tag_ids": [[4, <tag_id>]]}],
-        {"context": {"mail_create_nolog": true, "mail_create_nosubscribe": true,
-                     "mail_auto_subscribe_no_notify": true, "tracking_disable": true}})
+write(model="project.task", ids=[<task_id>], values={"tag_ids": [[4, <tag_id>]]},
+      context=<quiet> + {"tracking_disable": true})
 ```
 
 ## Internal notes (chatter)
 
-Posted **as the developer**: the connector is signed in as them, so the note's
-author is their own partner. `author_id` and `email_from` from `user_identity`
-(each teammate has their own) stay explicit all the same, so a note never comes
-out under another name:
+Posted **as the developer** with the connector's `message_post`: it logs what
+the chatter's *Log note* button posts, and its author is always whoever the
+connector is signed in as. It takes no `author_id`, `email_from` or mentions,
+so a note cannot come out under another name. `mail_create_nosubscribe` keeps
+you off the task's followers:
 
 ```
-execute("project.task", "message_post", [[<task_id>]], {
-  "body": "<p><b>Category</b> — text…</p>",
-  "subtype_xmlid": "mail.mt_note",
-  "author_id": <user_identity → Odoo prod partner id>,   # e.g. 2161
-  "email_from": "<Full name> <<odoo login email>>",      # e.g. Full Name <user@example.com>
-  "context": {"mail_create_nosubscribe": true}
-})
+message_post(model="project.task", res_id=<task_id>,
+             body="<p><b>Category</b> — text…</p>",
+             context={"mail_create_nosubscribe": true})
 ```
 
 Bold **Category** prefix: `Requirement Change` / `Design Decision` /
 `Bug Fix` / `Review Fix` / `User Feedback` / `Progress` / `Deploy` (the exact
-commands a deploy ran — see the `deploy` skill). Re-resolve the partner id via
-`res.users read [uid] ["partner_id"]` if it ever mismatches.
+commands a deploy ran — see the `deploy` skill).
 
 ## Checklist (`project.task.subtask`)
 
@@ -154,6 +166,9 @@ commands a deploy ran — see the `deploy` skill). Re-resolve the partner id via
   (`user_id` is required); optional `deadline`.
 - States: `todo` (default) / `done` / `waiting` / `cancelled` — complete a
   step with `write {"state": "done"}`.
+- Both with `<quiet>`: without `mail_auto_subscribe_no_notify`,
+  `send_subtask_email` messages the reviewer and the assignee on every
+  checklist create and on every change of `state`, `name` or `user_id`.
 
 ## Test cases (`project.task.testcase`)
 
@@ -182,12 +197,10 @@ Checklist model `project.task.subtask` above, despite the name.
 write `child_ids` from the parent):
 
 ```
-execute("project.task", "create", [{"name": "<slice>", "parent_id": <current_id>,
+create(model="project.task", values={"name": "<slice>", "parent_id": <current_id>,
   "project_id": <proj>, "user_ids": [[6, 0, [<uid>]]], "task_type": "...",
   "tag_ids": [[6, 0, [<ids>]]], "tshirt_estimate": "...", "planned_hours": <n>,
-  "description": "<full copy>"}],
-  {"context": {"mail_create_nolog": true, "mail_create_nosubscribe": true,
-               "mail_auto_subscribe_no_notify": true}})
+  "description": "<full copy>"}, context=<quiet>)
 ```
 
 **Link a blocker** — create the blocker task first (full conventions), then add
@@ -195,10 +208,9 @@ it to the **blocked** task's `depend_on_ids`. `depend_on_ids` is tracked, so
 include `tracking_disable`:
 
 ```
-blocker = execute("project.task", "create", [{...full task vals...}], {"context": {<quiet>}})
-execute("project.task", "write", [[<blocked_id>], {"depend_on_ids": [[4, blocker]]}],
-        {"context": {"mail_create_nolog": true, "mail_create_nosubscribe": true,
-                     "mail_auto_subscribe_no_notify": true, "tracking_disable": true}})
+blocker = create(model="project.task", values={...full task vals...}, context=<quiet>)["id"]
+write(model="project.task", ids=[<blocked_id>], values={"depend_on_ids": [[4, blocker]]},
+      context=<quiet> + {"tracking_disable": true})
 ```
 
 - The blocker must have a `project_id` (the field's domain requires it).
@@ -219,8 +231,8 @@ link = begin_upload(model="project.task", res_id=<id>, filename="<file>")
 # Bash: run link["command"] with FILE replaced by the path, i.e.
 #   curl -sS --fail-with-body --data-binary @<path> '<upload_url>'
 # -> {"id": <att>, "checksum": "<sha1>", "file_size": ..., ...}
-execute("project.task", "message_post", [[<id>]],
-        {..internal-note kwargs.., "attachment_ids": [<att>, ...]})
+message_post(model="project.task", res_id=<id>, body="<p>…</p>",
+             attachment_ids=[<att>, ...], context={"mail_create_nosubscribe": true})
 ```
 
 - One link per file: single use, 10 minutes, 20 MB. Several files: a link
@@ -239,11 +251,11 @@ the model's context, cost tokens and can be corrupted on the way. Pick
 
 ```
 b64 = base64 of the local file
-att = execute("ir.attachment", "create", [{"name": "<file>",
+att = create(model="ir.attachment", values={"name": "<file>",
       "datas": b64, "res_model": "project.task", "res_id": <id>,
-      "mimetype": "<mimetype>"}])
-execute("project.task", "message_post", [[<id>]],
-        {..internal-note kwargs.., "attachment_ids": [att]})
+      "mimetype": "<mimetype>"})["id"]
+message_post(model="project.task", res_id=<id>, body="<p>…</p>",
+             attachment_ids=[att], context={"mail_create_nosubscribe": true})
 ```
 
 Then read the attachment's `checksum` and compare it with `sha1sum`. A file
@@ -271,8 +283,8 @@ write, the script goes on the task as a record of what was run.
 
 - **Start of work** (the user says to start / take into work a ticket or
   a memory item with `[odoo:ID]`):
-  1. `write {"stage_id": <Development>}` (+ `tracking_disable` context);
-  2. assign the owner if not yet assigned (`user_ids` + flag context);
+  1. `write {"stage_id": <Development>}` (`<quiet>` + `tracking_disable`);
+  2. assign the owner if not yet assigned (`user_ids`, `<quiet>`);
   3. **set the Planned Dates window** so the ticket lands on the schedule:
      `planned_date_start` = now, `planned_date_end` = now + the estimate
      (`tshirt_estimate`/`planned_hours` at ~6 focused h/day), and
