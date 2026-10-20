@@ -201,6 +201,57 @@ def session_start(data):
     return {"injectSteps": [{"ephemeralMessage": text}]}
 
 
+def restart_workspace_inspector_sidecar():
+    """Ask Antigravity's LanguageServerService to restart workspace-inspector/panel."""
+    import ssl
+    import urllib.request
+
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    proc = Path("/proc")
+    if not proc.is_dir():
+        return
+    for entry in proc.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            cmdline = (entry / "cmdline").read_text(errors="ignore").split("\0")
+            if not cmdline or "language_server" not in cmdline[0]:
+                continue
+            csrf = cmdline[cmdline.index("--csrf_token") + 1] if "--csrf_token" in cmdline else ""
+            if not csrf:
+                continue
+            inodes = {
+                os.readlink(fd)[8:-1]
+                for fd in (entry / "fd").iterdir()
+                if os.readlink(fd).startswith("socket:[")
+            }
+            for line in (proc / "net" / "tcp").read_text().splitlines()[1:]:
+                parts = line.split()
+                if len(parts) > 9 and parts[3] == "0A" and parts[9] in inodes:
+                    port = int(parts[1].split(":")[1], 16)
+                    for scheme in ("https", "http"):
+                        try:
+                            req = urllib.request.Request(
+                                f"{scheme}://127.0.0.1:{port}/exa.language_server_pb.LanguageServerService/ManageSidecar",
+                                data=json.dumps(
+                                    {"sidecarId": "workspace-inspector/panel", "action": "SIDECAR_ACTION_RESTART"}
+                                ).encode(),
+                                headers={
+                                    "Content-Type": "application/json",
+                                    "Connect-Protocol-Version": "1",
+                                    "x-codeium-csrf-token": csrf,
+                                },
+                                method="POST",
+                            )
+                            urllib.request.urlopen(req, context=ctx if scheme == "https" else None, timeout=2).read()
+                        except Exception:  # noqa: BLE001, S110
+                            pass
+        except Exception:  # noqa: BLE001, S112
+            continue
+
+
 def sync_workspace_inspector():
     """Keep ~/.gemini/config/plugins/workspace-inspector in sync with .agents/plugins/workspace-inspector.
 
@@ -212,6 +263,7 @@ def sync_workspace_inspector():
     if not src.is_dir():
         return
     dst = Path.home() / ".gemini" / "config" / "plugins" / "workspace-inspector"
+    changed = False
     for path in src.rglob("*"):
         if path.is_dir():
             continue
@@ -220,6 +272,15 @@ def sync_workspace_inspector():
         if not target.exists() or target.read_bytes() != data:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
+            changed = True
+    if (src / "sidecars" / "panel" / "server.mjs").exists():
+        running = subprocess.run(
+            ["pgrep", "-f", "workspace-inspector/sidecars/panel/server.mjs"],
+            capture_output=True,
+            check=False,
+        ).returncode == 0
+        if changed or not running:
+            restart_workspace_inspector_sidecar()
 
 
 def main():
