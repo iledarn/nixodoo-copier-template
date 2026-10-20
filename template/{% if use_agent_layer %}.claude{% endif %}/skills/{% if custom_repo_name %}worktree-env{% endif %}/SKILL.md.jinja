@@ -40,6 +40,9 @@ Invoke by absolute path under `${{ project_dir_var }}/.claude/skills/worktree-en
 - **`wt-test.sh <slug> <odoo args...>`** — a one-shot run against the session, tests
   above all (`wt-test.sh <slug> -u <module> --test-enable --test-tags /<module>`):
   the session conf and DB, a free port, the IPv4 loopback, a dbfilter naming the DB.
+  Refuses a `-u` of a module the DB does not have installed (exit 2, before Odoo
+  starts: a seed dump older than the module, use `-i`) and fails a test run that
+  executed 0 tests (exit 3: a selector without the leading `/`, say).
 - `wt-link.sh <tree> <farm>` / `wt-restore.sh <slug>` — internals used by `wt-start`.
 
 **Slug** = kebab branch name, conventionally `<kio-key-lower>-<short-desc>`

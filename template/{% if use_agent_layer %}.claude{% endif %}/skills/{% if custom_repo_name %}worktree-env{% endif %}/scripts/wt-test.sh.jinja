@@ -10,6 +10,13 @@
 # Still loopback only, so the prod copy never reaches the LAN. Stop the session's
 # service first when the run updates modules (-u / -i): one process per DB.
 #
+# Two runs that would exit 0 having tested nothing are refused:
+#   - a module in -u that the session DB does not have installed (a seed dump
+#     older than the module): -u updates nothing and runs none of its tests.
+#     Stops before Odoo starts, naming the -i it needs (exit 2);
+#   - a test run that executed 0 tests, e.g. a selector naming no test such as a
+#     bare `--test-tags module` (exit 3).
+#
 # Usage: wt-test.sh <slug> <odoo args...>
 #   wt-test.sh kio-1234-x -u {{ module_prefix }}_mod --test-enable --test-tags /{{ module_prefix }}_mod
 set -euo pipefail
@@ -22,5 +29,61 @@ CONF="$WT_ENVROOT/$SLUG/odoo.conf"
 [ -f "$CONF" ] || { echo "ERROR: no session conf at $CONF - run wt-start.sh $SLUG first" >&2; exit 1; }
 PORT="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
 
-exec "$HOME/{{ nix_profile_rel }}/bin/odoo" -c "$CONF" --workers 0 --stop-after-init --logfile= \
-    --http-interface 127.0.0.1 --http-port "$PORT" --db-filter "^${DB}\$" "$@"
+# What the run updates and whether it runs tests (--test-tags alone enables them).
+UPDATE=""
+TESTS=0
+TAKES_MODULES=0
+for arg in "$@"; do
+    if [ "$TAKES_MODULES" -eq 1 ]; then
+        UPDATE="$UPDATE,$arg"
+        TAKES_MODULES=0
+        continue
+    fi
+    case "$arg" in
+        -u | --update) TAKES_MODULES=1 ;;
+        --update=*) UPDATE="$UPDATE,${arg#--update=}" ;;
+        -u*) UPDATE="$UPDATE,${arg#-u}" ;;
+        --test-enable | --test-tags | --test-tags=* | --test-file | --test-file=*) TESTS=1 ;;
+    esac
+done
+UPDATE="${UPDATE#,}"
+
+if [ -n "$UPDATE" ]; then
+    # 'to upgrade' is installed with an update pending; 'all' names no module.
+    MISSING="$($PSQL -d "$DB" -tA -F ' ' -v modules="$UPDATE" <<'SQL'
+SELECT name, COALESCE(state, 'absent')
+  FROM unnest(string_to_array(:'modules', ',')) AS name
+  LEFT JOIN ir_module_module USING (name)
+ WHERE name NOT IN ('', 'all') AND COALESCE(state, 'absent') NOT IN ('installed', 'to upgrade');
+SQL
+)"
+    if [ -n "$MISSING" ]; then
+        while read -r name state; do
+            echo "ERROR: $name is $state in $DB, so -u updates nothing and runs none of its tests" \
+                 "(the seed dump predates it?): install it with -i $name" >&2
+        done <<< "$MISSING"
+        exit 2
+    fi
+fi
+
+ODOO=("$HOME/{{ nix_profile_rel }}/bin/odoo" -c "$CONF" --workers 0 --stop-after-init --logfile=
+      --http-interface 127.0.0.1 --http-port "$PORT" --db-filter "^${DB}\$")
+
+[ "$TESTS" -eq 1 ] || exec "${ODOO[@]}" "$@"
+
+# A test run: the output passes through, and the count Odoo reports last
+# ("odoo.tests.result: F failed, E error(s) of N tests when loading database")
+# decides whether anything ran.
+LOG="$(mktemp)"
+trap 'rm -f "$LOG"' EXIT
+set +e
+"${ODOO[@]}" "$@" 2>&1 | tee "$LOG"
+RC=${PIPESTATUS[0]}
+set -e
+COUNT="$(sed -n 's/.*odoo\.tests\.result: .* of \([0-9][0-9]*\) tests when loading database.*/\1/p' "$LOG" | tail -n 1)"
+if [ "$RC" -eq 0 ] && [ "${COUNT:-0}" -eq 0 ]; then
+    echo "ERROR: the run executed 0 tests: check the selector (/module, /module:Class," \
+         "/module:Class.test_method) and that the module is installed in $DB" >&2
+    exit 3
+fi
+exit "$RC"
