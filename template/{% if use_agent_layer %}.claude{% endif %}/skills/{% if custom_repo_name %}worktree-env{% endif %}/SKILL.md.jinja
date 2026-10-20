@@ -30,6 +30,12 @@ Invoke by absolute path under `${{ project_dir_var }}/.claude/skills/worktree-en
   `odoo{{ service_suffix }}-wt@<slug>.service`.
   **Idempotent — re-run to refresh** (e.g. after adding a new module dir). Prints
   `WORKTREE:` / `BRANCH:` / `URL:` / `CONF:` / `DB:` / `PORT:` — capture these.
+  Refuses to run from a Claude worktree of the project (`.claude/worktrees/<name>`,
+  exit 4, before anything is created): the desktop app's worktree guard refuses
+  Edit/Write in the base checkout, which is where `.worktrees/<slug>` lives, so the
+  session would get an env it cannot edit. Addons work runs in a session started in
+  the base checkout (`use_worktree: false`); `WT_ALLOW_CLAUDE_WORKTREE=1` lets a
+  read-only or test-only run through.
 - **`wt-stop.sh <slug>`** — stop the env's Odoo; if the worktree is clean, remove it,
   drop `wt_<slug>`, delete the runtime dir (the branch stays on origin). A **dirty**
   worktree is kept (worktree + env + DB) and reported so no work is lost.

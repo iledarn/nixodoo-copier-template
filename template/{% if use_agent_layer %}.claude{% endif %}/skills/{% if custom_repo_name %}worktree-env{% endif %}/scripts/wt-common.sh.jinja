@@ -35,3 +35,29 @@ WT_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 db_name_for() { echo "wt_${1//-/_}"; }                                   # slug -> safe pg identifier
 db_exists()   { $PSQL -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$1'" | grep -q 1; }
+
+# A session running in a Claude worktree of this project (<project>/.claude/worktrees/<name>,
+# where the desktop app and EnterWorktree put them) cannot edit an env it brings up: the
+# app's worktree guard refuses Edit/Write anywhere in the base checkout, and $WT_ROOT is
+# inside it, though the code worktree there belongs to the addons repo. Refused before the
+# restore, so the minutes go nowhere; WT_ALLOW_CLAUDE_WORKTREE=1 for a run that only reads.
+refuse_in_claude_worktree() {
+    local here proj
+    here="$(pwd -P)"
+    proj="$(cd "$PROJ" 2>/dev/null && pwd -P || echo "$PROJ")"
+    case "$here/" in
+        "$proj"/.claude/worktrees/*) ;;
+        *) return 0 ;;
+    esac
+    [ -n "${WT_ALLOW_CLAUDE_WORKTREE:-}" ] && return 0
+    cat >&2 <<EOF
+ERROR: this session runs in a Claude worktree of the project ($here).
+The desktop app's worktree guard refuses Edit/Write in the base checkout ($proj),
+and the env's code worktree would be there ($1): the env would come up and none
+of its files could be edited.
+Run this work from a session in the base checkout (a session started without a
+worktree of its own: use_worktree false). For a run that only reads or tests,
+WT_ALLOW_CLAUDE_WORKTREE=1 brings the env up anyway.
+EOF
+    exit 4
+}
