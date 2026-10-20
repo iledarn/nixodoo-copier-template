@@ -1,0 +1,55 @@
+{
+{% if use_kb %}
+  "env": {
+    "CLAUDE_CODE_PLUGIN_DIRS": "~/.nix-profile/share/kb/claude-plugin"
+  },
+{% endif %}
+  "permissions": {
+    "defaultMode": "auto"
+  },
+  "model": "opus[1m]",
+  "hooks": {
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash @HOME@/.claude/hooks/notify-desktop.sh"
+          }
+        ]
+      }
+    ]
+  },
+  "enabledPlugins": {
+    "security-guidance@claude-plugins-official": true
+  },
+  "extraKnownMarketplaces": {
+    "Mixedbread-Grep": {
+      "source": {
+        "source": "github",
+        "repo": "mixedbread-ai/mgrep"
+      }
+    }
+  },
+  "effortLevel": "xhigh",
+  "modelSettings": {
+    "claude-opus-5-5": {
+      "effortLevel": "xhigh"
+    }
+  },
+  "tui": "fullscreen",
+  "theme": "dark",
+  "preferredNotifChannel": "terminal_bell",
+  "teammateMode": "in-process",
+  "inputNeededNotifEnabled": true,
+  "agentPushNotifEnabled": true,
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Bash(systemctl --user start:*) Bash(systemctl --user stop:*) Bash(systemctl --user restart:*) Bash(systemctl --user status:*) for odoo{{ service_suffix }}.service/postgres{{ service_suffix }}.service/nginx{{ service_suffix }}.service in this repo",
+      "Bash(psql:*) read/local-dev queries against the local `{{ db_name }}` database on localhost:{{ postgres_port }}",
+      "Bash(ruff:*) and Bash(uvx:*) invocations scoped to this repo (lint/format/doc generation)",
+      "Bash(nix run .#update-repos) in this repo"
+    ]
+  }
+}
