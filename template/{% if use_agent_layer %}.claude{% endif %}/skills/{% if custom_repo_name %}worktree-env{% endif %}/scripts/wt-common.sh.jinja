@@ -52,6 +52,17 @@ PSQL="psql -h $WT_DB_HOST -p $WT_DB_PORT -U {{ db_user }}"
 
 WT_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-db_name_for() { echo "wt_${1//-/_}"; }
-session_host() { echo "$1.$WT_HOST_SUFFIX"; }                     # DB -> host whose first label is the DB (dbfilter ^%d$)                                   # slug -> safe pg identifier
+db_name_for() { echo "wt_${1//-/_}"; }                                   # slug -> safe pg identifier
+session_host() { echo "$1.$WT_HOST_SUFFIX"; }                          # DB -> host whose first label is the DB (dbfilter ^%d$)
 db_exists()   { $PSQL -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$1'" | grep -q 1; }
+
+# WITH (FORCE) refuses outright for a non-superuser role when any connection
+# belongs to another role - an autovacuum worker analysing a fresh restore is
+# enough (a shared server's postgres, where the role is no superuser). Then end
+# this role's own connections and drop plainly: a plain drop stops autovacuum
+# workers by itself.
+drop_db() {
+    $PSQL -d postgres -c "DROP DATABASE IF EXISTS $1 WITH (FORCE);" >/dev/null 2>&1 && return 0
+    $PSQL -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='$1' AND usename=current_user AND pid<>pg_backend_pid();" >/dev/null
+    $PSQL -d postgres -c "DROP DATABASE IF EXISTS $1;" >/dev/null
+}

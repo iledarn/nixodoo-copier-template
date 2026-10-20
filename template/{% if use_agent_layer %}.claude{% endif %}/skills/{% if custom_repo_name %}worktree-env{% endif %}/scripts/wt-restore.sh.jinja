@@ -45,22 +45,22 @@ if [ "$RESTORE_JOBS" -gt 4 ]; then RESTORE_JOBS=4; fi
 # `odoo neutralize` fail on a serialization conflict. Hence the staging name.
 STAGING_DB="${DB}_restoring"
 echo "STATUS: restoring $STAGING_DB from $(basename "$DUMP") … ($RESTORE_JOBS jobs, errors: $RESTORE_LOG)"
-$PSQL -d postgres -c "DROP DATABASE IF EXISTS $STAGING_DB WITH (FORCE);" >/dev/null
+drop_db "$STAGING_DB"
 $PSQL -d postgres -c "CREATE DATABASE $STAGING_DB OWNER {{ db_user }};" >/dev/null
 pg_restore --clean --no-acl --no-owner -j "$RESTORE_JOBS" -h "$WT_DB_HOST" -p "$WT_DB_PORT" -U {{ db_user }} -d "$STAGING_DB" "$DUMP" 2>"$RESTORE_LOG" || true
 
 [ "$($PSQL -d "$STAGING_DB" -tAc "SELECT count(*) FROM res_users" 2>/dev/null)" -gt 0 ] 2>/dev/null \
-    || { $PSQL -d postgres -c "DROP DATABASE IF EXISTS $STAGING_DB WITH (FORCE);" >/dev/null
+    || { drop_db "$STAGING_DB"
          echo "ERROR: restore incomplete (res_users empty) — see $RESTORE_LOG" >&2; exit 1; }
 
 echo "STATUS: neutralizing $STAGING_DB (odoo neutralize) …"
 {{ project_dir_var }}="$PROJ" odoo neutralize -c "$CONF" -d "$STAGING_DB" \
-    || { $PSQL -d postgres -c "DROP DATABASE IF EXISTS $STAGING_DB WITH (FORCE);" >/dev/null
+    || { drop_db "$STAGING_DB"
          echo "ERROR: neutralization failed — the raw prod copy was dropped" >&2; exit 1; }
 
 # Dev fixups (psql continues past any table this dump lacks).
 $PSQL -d "$STAGING_DB" -f "$PROJ/nix/scripts/dev-fixup.sql" || true
 
-$PSQL -d postgres -c "DROP DATABASE IF EXISTS $DB WITH (FORCE);" >/dev/null
+drop_db "$DB"
 $PSQL -d postgres -c "ALTER DATABASE $STAGING_DB RENAME TO $DB;" >/dev/null
 echo "STATUS: db-ready ($DB)"
