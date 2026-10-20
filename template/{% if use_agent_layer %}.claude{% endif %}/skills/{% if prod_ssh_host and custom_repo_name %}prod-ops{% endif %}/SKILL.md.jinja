@@ -116,8 +116,8 @@ before writing.
 
 Every script run against prod for a task — read-only included — is **attached
 to that task** when you run it, not at close, paired with an internal note:
-model, records affected, dry-run vs committed, counts. Mechanics (base64 →
-`ir.attachment` → `message_post`): `odoo-tickets` skill, Attachments.
+model, records affected, dry-run vs committed, counts. Mechanics (`begin_upload`
+→ `message_post` with `attachment_ids`): `odoo-tickets` skill, Attachments.
 {% endif %}
 
 ## Service ops

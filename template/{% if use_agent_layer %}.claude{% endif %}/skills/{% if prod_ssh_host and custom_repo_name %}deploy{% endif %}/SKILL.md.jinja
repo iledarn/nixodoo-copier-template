@@ -518,8 +518,8 @@ later. After Step 7, post an internal note to the task(s) the PR closes.
   skip; never guess a task.
 - **Through** the Odoo connector (production, signed in as you; `odoo-tickets` →
   Connection & context flags).
-- **Post** per `odoo-tickets` (Internal notes — `message_post` with the identity
-  node's author fields + quiet context). Body = host, modules, result (exit
+- **Post** per `odoo-tickets` (Internal notes — the connector's `message_post`,
+  signed by you). Body = host, modules, result (exit
   code{% if use_queue_job %} + requeued count{% endif %}), PR link, and the **commands verbatim** in a
   `<pre>`: the Step-2 deploy command{% if use_queue_job %} and the Step-6 requeue command{% endif %}.
   HTML-escape them (`&` → `&amp;`, `<` → `&lt;`).
