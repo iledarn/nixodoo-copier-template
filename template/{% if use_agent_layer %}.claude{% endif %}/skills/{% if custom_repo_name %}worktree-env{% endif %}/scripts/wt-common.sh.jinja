@@ -12,6 +12,8 @@
 # pinned OCA/CE module sources and the postgres cluster. There is no main env:
 # no main Odoo, no reverse proxy, no main database; every pipeline run works here.
 # A session is served at http://wt_<slug>.localhost:<port> (dbfilter ^%d$).
+# On a shared test server the WT_* overrides below move postgres to another host
+# and serve the session on the LAN as http://wt_<slug>.<WT_HOST_SUFFIX>:<port>.
 
 PROJ="${{ "{" }}{{ project_dir_var }}:-$HOME/{{ project_name }}}"
 SRC_REPO="$PROJ/src/{{ custom_repo_name }}"               # nested addons repo (the user's main checkout)
@@ -25,15 +27,34 @@ LOCKFILE="$WT_ROOT/.wt.lock"                        # serializes port alloc + gi
 PORT_BASE={{ (odoo_major | int + 11) * 100 }}                                      # session http ports live in [{{ (odoo_major | int + 11) * 100 }}, {{ (odoo_major | int + 11) * 100 + 99 }}]
 PORT_MAX={{ (odoo_major | int + 11) * 100 + 99 }}
 
-# Local postgres (odoo.conf: localhost:{{ postgres_port }}, odoo/odoo). The shared cluster is
-# already up via postgres{{ service_suffix }}.service — we never pg_ctl it, only create/drop DBs.
-export PGPASSWORD={{ db_password }}
+# Per-host overrides, read from WT_* lines in $PROJ/.env (no quotes, nothing else
+# from that file is read). Unset = local development, the defaults below. A shared
+# test server sets e.g.
+#   WT_DB_HOST=192.168.20.121  WT_DB_PORT=5432  WT_DB_PASSWORD=...
+#   WT_HTTP_INTERFACE=0.0.0.0  WT_HOST_SUFFIX=odoo1.example.lan
+# so sessions use that postgres and are browsed from the LAN. WT_HOST_SUFFIX must
+# resolve at any depth (a wildcard record) to this host, as *.localhost does locally.
+if [ -f "$PROJ/.env" ]; then
+    while IFS='=' read -r key value; do
+        printf -v "$key" '%s' "$value"
+    done < <(grep -E '^WT_(DB_HOST|DB_PORT|DB_PASSWORD|HTTP_INTERFACE|HOST_SUFFIX)=' "$PROJ/.env" || true)
+fi
+WT_DB_HOST="${WT_DB_HOST:-localhost}"
+WT_DB_PORT="${WT_DB_PORT:-{{ postgres_port }}}"
+WT_DB_PASSWORD="${WT_DB_PASSWORD:-{{ db_password }}}"
+WT_HTTP_INTERFACE="${WT_HTTP_INTERFACE:-::1}"
+WT_HOST_SUFFIX="${WT_HOST_SUFFIX:-localhost}"
+
+# Postgres (local default: localhost:{{ postgres_port }}, the shared cluster already up via
+# postgres{{ service_suffix }}.service) — we never pg_ctl it, only create/drop DBs.
+export PGPASSWORD="$WT_DB_PASSWORD"
 # -X: a ~/.psqlrc (\timing on, say) would print into the output the scripts read back.
-PSQL="psql -X -h localhost -p {{ postgres_port }} -U {{ db_user }}"
+PSQL="psql -X -h $WT_DB_HOST -p $WT_DB_PORT -U {{ db_user }}"
 
 WT_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 db_name_for() { echo "wt_${1//-/_}"; }                                   # slug -> safe pg identifier
+session_host() { echo "$1.$WT_HOST_SUFFIX"; }                          # DB -> host whose first label is the DB (dbfilter ^%d$)
 db_exists()   { $PSQL -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$1'" | grep -q 1; }
 
 # A session running in a Claude worktree of this project (<project>/.claude/worktrees/<name>,

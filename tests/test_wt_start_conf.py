@@ -35,6 +35,7 @@ SRC = pathlib.Path(
     "/{% if custom_repo_name %}worktree-env{% endif %}/scripts/wt-start.sh.jinja"
 )
 TEST_SRC = SRC.with_name("wt-test.sh.jinja")
+COMMON_SRC = SRC.with_name("wt-common.sh.jinja")
 
 BASE = dict(
     odoo_version="16.0", odoo_major="16", use_queue_job=True, db_user="odoo", db_password="odoo",
@@ -99,9 +100,55 @@ def port_name_follows_the_major():
 
 
 @case
-def db_credentials_come_from_the_answers():
+def db_connection_comes_from_wt_common():
+    # host/port/password are wt-common's WT_* (answers by default, .env overrides);
+    # the role stays the answer
     c = conf(render(db_user="erp", db_password="s3cret"))
-    assert (c["db_user"], c["db_password"]) == ("erp", "s3cret"), c
+    assert (c["db_user"], c["db_host"], c["db_port"], c["db_password"]) == \
+        ("erp", "$WT_DB_HOST", "$WT_DB_PORT", "$WT_DB_PASSWORD"), c
+
+
+def common_vars(env_lines=None, **answers):
+    """Source the rendered wt-common.sh in bash (PROJ = a temp dir holding .env)
+    and return the WT_* values and PSQL it ends up with."""
+    import subprocess, tempfile
+    text = jinja2.Environment(trim_blocks=True, lstrip_blocks=True, keep_trailing_newline=True).from_string(
+        COMMON_SRC.read_text()).render(**{**BASE, "project_dir_var": "PROJ_DIR", "project_name": "proj",
+                                          "custom_repo_name": "addons", **answers})
+    with tempfile.TemporaryDirectory() as d:
+        if env_lines is not None:
+            pathlib.Path(d, ".env").write_text("\n".join(env_lines) + "\n")
+        common = pathlib.Path(d, "wt-common.sh")
+        common.write_text(text)
+        names = ("WT_DB_HOST", "WT_DB_PORT", "WT_DB_PASSWORD", "WT_HTTP_INTERFACE", "WT_HOST_SUFFIX", "PSQL", "PGPASSWORD")
+        out = subprocess.run(
+            ["bash", "-c", 'set -euo pipefail; source "$1"; for v in ' + " ".join(names) + '; do printf "%s=%s\\n" "$v" "${!v}"; done; session_host wt_x',
+             "_", str(common)],
+            env={"PATH": os.environ["PATH"], "HOME": d, "PROJ_DIR": d}, capture_output=True, text=True, check=True).stdout
+    lines = out.splitlines()
+    vals = dict(line.split("=", 1) for line in lines[:-1])
+    vals["session_host"] = lines[-1]
+    return vals
+
+
+@case
+def without_overrides_a_session_is_local():
+    for env_lines in (None, ["PGHOST=elsewhere", "ODOO_URL=http://x"]):
+        v = common_vars(env_lines, db_password="s3cret", postgres_port=16432)
+        assert (v["WT_DB_HOST"], v["WT_DB_PORT"], v["WT_DB_PASSWORD"], v["WT_HTTP_INTERFACE"], v["WT_HOST_SUFFIX"]) == \
+            ("localhost", "16432", "s3cret", "::1", "localhost"), (env_lines, v)
+        assert v["PSQL"] == "psql -h localhost -p 16432 -U odoo" and v["PGPASSWORD"] == "s3cret", v
+        assert v["session_host"] == "wt_x.localhost", v
+
+
+@case
+def a_shared_test_server_overrides_from_dotenv():
+    v = common_vars(["PGPASSWORD=ignored", "WT_DB_HOST=10.0.0.5", "WT_DB_PORT=5432", "WT_DB_PASSWORD=p=w d",
+                     "WT_HTTP_INTERFACE=0.0.0.0", "WT_HOST_SUFFIX=box1.lan", "WT_EVIL=1", "#WT_DB_HOST=no"])
+    assert (v["WT_DB_HOST"], v["WT_DB_PORT"], v["WT_DB_PASSWORD"], v["WT_HTTP_INTERFACE"], v["WT_HOST_SUFFIX"]) == \
+        ("10.0.0.5", "5432", "p=w d", "0.0.0.0", "box1.lan"), v
+    assert v["PSQL"] == "psql -h 10.0.0.5 -p 5432 -U odoo" and v["PGPASSWORD"] == "p=w d", v
+    assert v["session_host"] == "wt_x.box1.lan", v
 
 
 @case
@@ -112,7 +159,7 @@ def no_report_url_option():
 @case
 def report_url_param_pinned_before_the_restart():
     text = render()
-    marker = "VALUES ('report.url', 'http://$DB.localhost:$PORT')"
+    marker = "VALUES ('report.url', 'http://$HOST:$PORT')"
     assert marker in text, "wt-start does not pin report.url"
     pin = text.index(marker)
     assert text.index('bash "$WT_SCRIPT_DIR/wt-restore.sh"') < pin < text.index("systemctl --user restart"), \
@@ -124,9 +171,12 @@ def the_host_names_the_database():
     # http://wt_<slug>.localhost:<port>: %d is the first label of the Host, and
     # *.localhost resolves to ::1, the only interface a session listens on (a
     # prod copy with admin/admin stays off the LAN)
+    # (locally; a shared test server moves both through WT_HTTP_INTERFACE / WT_HOST_SUFFIX)
     c = conf(render())
-    assert (c["dbfilter"], c["http_interface"]) == ("^%d\\$", "::1"), c
-    assert 'echo "URL: http://$DB.localhost:$PORT/web"' in render()
+    assert (c["dbfilter"], c["http_interface"]) == ("^%d\\$", "$WT_HTTP_INTERFACE"), c
+    text = render()
+    assert 'HOST="$(session_host "$DB")"' in text
+    assert 'echo "URL: http://$HOST:$PORT/web"' in text
 
 
 @case
@@ -139,7 +189,7 @@ def the_queue_job_runner_reaches_the_session():
     # the runner's job URL is http://<host>:<port>/queue_job/runjob: left to http_interface
     # the host is ::1 (an invalid URL host), and only the DB-named host passes ^%d$
     c = sections(render(use_queue_job=True))["queue_job"]
-    assert c == {"channels": "root:3", "host": "$DB.localhost", "port": "$PORT"}, c
+    assert c == {"channels": "root:3", "host": "$HOST", "port": "$PORT"}, c
     assert "queue_job" not in sections(render(use_queue_job=False))
 
 
