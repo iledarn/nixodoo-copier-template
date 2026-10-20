@@ -41,8 +41,11 @@ Invoke by absolute path under `${{ project_dir_var }}/.claude/skills/worktree-en
   above all (`wt-test.sh <slug> -u <module> --test-enable --test-tags /<module>`):
   the session conf and DB, a free port, the IPv4 loopback, a dbfilter naming the DB.
   Refuses a `-u` of a module the DB does not have installed (exit 2, before Odoo
-  starts: a seed dump older than the module, use `-i`) and fails a test run that
-  executed 0 tests (exit 3: a selector without the leading `/`, say).
+  starts: a seed dump older than the module, use `-i`) and fails a `--test-enable` /
+  `--test-tags` run whose summary reports 0 tests (exit 3: a selector without the
+  leading `/`, say). `--test-file` alone is not counted (Odoo prints no summary for
+  it); a run whose output has no summary (a `--logfile` of your own) keeps Odoo's
+  exit code and warns.
 - `wt-link.sh <tree> <farm>` / `wt-restore.sh <slug>` — internals used by `wt-start`.
 
 **Slug** = kebab branch name, conventionally `<kio-key-lower>-<short-desc>`

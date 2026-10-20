@@ -12,10 +12,13 @@
 #
 # Two runs that would exit 0 having tested nothing are refused:
 #   - a module in -u that the session DB does not have installed (a seed dump
-#     older than the module): -u updates nothing and runs none of its tests.
-#     Stops before Odoo starts, naming the -i it needs (exit 2);
-#   - a test run that executed 0 tests, e.g. a selector naming no test such as a
-#     bare `--test-tags module` (exit 3).
+#     older than the module), or a -u/-i list with a space (Odoo reads ' name'
+#     verbatim and skips it): -u updates nothing and runs none of its tests.
+#     Stops before Odoo starts, naming the -i or the spelling it needs (exit 2);
+#   - a --test-enable/--test-tags run whose summary line reports 0 tests, e.g. a
+#     selector naming no test such as a bare `--test-tags module` (exit 3).
+#     Odoo writes no summary for --test-file alone, so that run is not counted;
+#     a summary missing from the output (a --logfile of your own) only warns.
 #
 # Usage: wt-test.sh <slug> <odoo args...>
 #   wt-test.sh kio-1234-x -u {{ module_prefix }}_mod --test-enable --test-tags /{{ module_prefix }}_mod
@@ -29,34 +32,50 @@ CONF="$WT_ENVROOT/$SLUG/odoo.conf"
 [ -f "$CONF" ] || { echo "ERROR: no session conf at $CONF - run wt-start.sh $SLUG first" >&2; exit 1; }
 PORT="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
 
-# What the run updates and whether it runs tests (--test-tags alone enables them).
+# What the run installs and updates, and whether Odoo counts its tests: only
+# --test-enable and --test-tags set the test_enable its summary line needs.
 UPDATE=""
+INIT=""
 TESTS=0
-TAKES_MODULES=0
+NEXT=""
 for arg in "$@"; do
-    if [ "$TAKES_MODULES" -eq 1 ]; then
-        UPDATE="$UPDATE,$arg"
-        TAKES_MODULES=0
-        continue
-    fi
+    case "$NEXT" in
+        update) UPDATE="$UPDATE,$arg"; NEXT=""; continue ;;
+        init) INIT="$INIT,$arg"; NEXT=""; continue ;;
+    esac
     case "$arg" in
-        -u | --update) TAKES_MODULES=1 ;;
+        -u | --update) NEXT=update ;;
         --update=*) UPDATE="$UPDATE,${arg#--update=}" ;;
         -u*) UPDATE="$UPDATE,${arg#-u}" ;;
-        --test-enable | --test-tags | --test-tags=* | --test-file | --test-file=*) TESTS=1 ;;
+        -i | --init) NEXT=init ;;
+        --init=*) INIT="$INIT,${arg#--init=}" ;;
+        -i*) INIT="$INIT,${arg#-i}" ;;
+        --test-enable | --test-tags | --test-tags=*) TESTS=1 ;;
     esac
 done
 UPDATE="${UPDATE#,}"
+INIT="${INIT#,}"
+
+for modules in "$UPDATE" "$INIT"; do
+    case "$modules" in
+        *[[:space:]]*)
+            echo "ERROR: '$modules' has a space, and Odoo skips ' name' as no module:" \
+                 "write ${modules//[[:space:]]/}" >&2
+            exit 2 ;;
+    esac
+done
 
 if [ -n "$UPDATE" ]; then
-    # 'to upgrade' is installed with an update pending; 'all' names no module.
-    MISSING="$($PSQL -d "$DB" -tA -F ' ' -v modules="$UPDATE" <<'SQL'
+    # Any update run loads 'to upgrade' and 'to install' modules, and installs
+    # those in -i; 'all' names no module.
+    MISSING="$($PSQL -d "$DB" -tA -F ' ' -v ON_ERROR_STOP=1 -v modules="$UPDATE" -v init="$INIT" <<'SQL'
 SELECT name, COALESCE(state, 'absent')
   FROM unnest(string_to_array(:'modules', ',')) AS name
   LEFT JOIN ir_module_module USING (name)
- WHERE name NOT IN ('', 'all') AND COALESCE(state, 'absent') NOT IN ('installed', 'to upgrade');
+ WHERE name NOT IN ('', 'all') AND name <> ALL (string_to_array(:'init', ','))
+   AND COALESCE(state, 'absent') NOT IN ('installed', 'to upgrade', 'to install');
 SQL
-)"
+)" || { echo "ERROR: cannot read module states from $DB (is the session up? wt-start.sh $SLUG)" >&2; exit 1; }
     if [ -n "$MISSING" ]; then
         while read -r name state; do
             echo "ERROR: $name is $state in $DB, so -u updates nothing and runs none of its tests" \
@@ -73,17 +92,20 @@ ODOO=("$HOME/{{ nix_profile_rel }}/bin/odoo" -c "$CONF" --workers 0 --stop-after
 
 # A test run: the output passes through, and the count Odoo reports last
 # ("odoo.tests.result: F failed, E error(s) of N tests when loading database")
-# decides whether anything ran.
+# decides whether anything ran. The log handler keeps that INFO line in the
+# output under any --log-level.
 LOG="$(mktemp)"
 trap 'rm -f "$LOG"' EXIT
 set +e
-"${ODOO[@]}" "$@" 2>&1 | tee "$LOG"
+"${ODOO[@]}" --log-handler odoo.tests.result:INFO "$@" 2>&1 | tee "$LOG"
 RC=${PIPESTATUS[0]}
 set -e
+[ "$RC" -eq 0 ] || exit "$RC"
 COUNT="$(sed -n 's/.*odoo\.tests\.result: .* of \([0-9][0-9]*\) tests when loading database.*/\1/p' "$LOG" | tail -n 1)"
-if [ "$RC" -eq 0 ] && [ "${COUNT:-0}" -eq 0 ]; then
+if [ -z "$COUNT" ]; then
+    echo "WARNING: no test summary in the output (a --logfile of your own?): the test count was not checked" >&2
+elif [ "$COUNT" -eq 0 ]; then
     echo "ERROR: the run executed 0 tests: check the selector (/module, /module:Class," \
          "/module:Class.test_method) and that the module is installed in $DB" >&2
     exit 3
 fi
-exit "$RC"
