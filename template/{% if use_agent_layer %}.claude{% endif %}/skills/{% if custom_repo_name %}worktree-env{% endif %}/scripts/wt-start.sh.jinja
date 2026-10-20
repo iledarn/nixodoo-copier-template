@@ -15,6 +15,7 @@ ENV_DIR="$WT_ENVROOT/$SLUG"
 DATA_DIR="$ENV_DIR/data"
 FARM="$DATA_DIR/addons/{{ odoo_version }}"
 CONF="$ENV_DIR/odoo.conf"
+HOST="$(session_host "$DB")"
 
 bash "$WT_SCRIPT_DIR/wt-bootstrap.sh"
 ls "$BACKUP_DIR"/*.dump >/dev/null 2>&1 || {
@@ -57,13 +58,13 @@ cat > "$CONF" <<EOF
 admin_passwd = odoo
 data_dir = $DATA_DIR
 logfile = $ENV_DIR/odoo.log
-db_host = localhost
+db_host = $WT_DB_HOST
 db_name = $DB
-db_password = {{ db_password }}
-db_port = {{ postgres_port }}
+db_password = $WT_DB_PASSWORD
+db_port = $WT_DB_PORT
 db_user = {{ db_user }}
 dbfilter = ^%d\$
-http_interface = ::1
+http_interface = $WT_HTTP_INTERFACE
 http_port = $PORT
 limit_memory_soft = 4294967296
 limit_memory_hard = 5368709120
@@ -80,14 +81,14 @@ workers = 0
 
 [queue_job]
 channels = root:3
-host = $DB.localhost
+host = $HOST
 port = $PORT
 {% endif %}
 EOF
 # [queue_job] host: the runner calls http://<host>:<port>/queue_job/runjob. Left to
 # http_interface it would be ::1, an unbracketed and so invalid URL host; and dbfilter
 # ^%d$ finds the session DB only by a Host whose first label is the DB name, which
-# $DB.localhost is (resolving to ::1, where the session listens).
+# $HOST is (locally $DB.localhost, resolving to ::1, where the session listens).
 
 bash "$WT_SCRIPT_DIR/wt-restore.sh" "$SLUG"
 
@@ -96,16 +97,17 @@ bash "$WT_SCRIPT_DIR/wt-restore.sh" "$SLUG"
 # NOT a core option (nothing reads it) — this param is the only thing that keeps
 # rendering off THIS env. The host carries the DB name for dbfilter ^%d$, and
 # resolves to ::1 — hence http_interface = ::1: loopback only, so a neutralized
-# prod copy with admin/admin is never reachable from the LAN. Runs on the
+# prod copy with admin/admin is never reachable from the LAN. A shared test
+# server opts in to the LAN with WT_HTTP_INTERFACE / WT_HOST_SUFFIX (wt-common.sh). Runs on the
 # reused-DB path too (wt-restore early-exits there), and before the restart so no
 # ormcache holds the old value.
-$PSQL -q -d "$DB" -c "INSERT INTO ir_config_parameter (key, value) VALUES ('report.url', 'http://$DB.localhost:$PORT') ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;" >/dev/null
+$PSQL -q -d "$DB" -c "INSERT INTO ir_config_parameter (key, value) VALUES ('report.url', 'http://$HOST:$PORT') ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;" >/dev/null
 
 systemctl --user restart "odoo{{ service_suffix }}-wt@$SLUG.service"
 
 echo "WORKTREE: $WT_PATH"
 echo "BRANCH: $SLUG"
-echo "URL: http://$DB.localhost:$PORT/web"
+echo "URL: http://$HOST:$PORT/web"
 echo "CONF: $CONF"
 echo "DB: $DB"
 echo "PORT: $PORT"
