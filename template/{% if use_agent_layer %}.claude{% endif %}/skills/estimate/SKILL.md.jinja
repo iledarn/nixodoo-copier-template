@@ -64,7 +64,7 @@ judgement call.
 {% if tickets_mcp == 'odoo' -%}
 ## Writing to the ticket
 
-- `planned_hours` = the estimate — **never a bucket value**.
+- `{{ 'planned_hours' if odoo_version == '16.0' else 'allocated_hours' }}` = the estimate — **never a bucket value**.
 - A t-shirt field, where the project has one, is the nearest bucket to that
   number: ≤2h `xs`, ≤6h `s`, ≤12h `m`, ≤32h `l`, ≤60h `xl`, else `xxl` (and
   split long before that).

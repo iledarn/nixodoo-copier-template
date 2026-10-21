@@ -204,6 +204,24 @@ task_keys:
   default: false
   when: "{{ tickets_mcp == 'odoo' }}"
 
+task_software_fields:
+  type: bool
+  help: Does the production Odoo run kaertech_project_software (project.task fields task_type, tshirt_estimate, priority_level, difficulty, knowledge_area_level, questions, answers, solution; models project.task.testcase and project.task.subtask)? Without it the ticket skills never read them; clarifying Q&A, the technical solution and test cases go to internal notes, and there is no checklist
+  default: false
+  when: "{{ tickets_mcp == 'odoo' }}"
+
+task_timeline:
+  type: bool
+  help: Does the production Odoo run OCA project_timeline (project.task planned_date_start / planned_date_end)? Without it the ticket skills schedule a task by date_deadline alone
+  default: false
+  when: "{{ tickets_mcp == 'odoo' }}"
+
+task_pr_uri:
+  type: bool
+  help: Does the production Odoo run OCA project_task_pull_request (project.task pr_uri, required before the done stage)? Without it a task closes by its stage move and the PR link goes to a Progress note
+  default: false
+  when: "{{ tickets_mcp == 'odoo' }}"
+
 use_pipeline:
   type: bool
   help: Include the pipeline skill (task -> dev -> QC gate -> docs -> demo GIF -> PR orchestrator; runs in isolated worktree envs)?
