@@ -22,7 +22,7 @@ Two facts the calibration file will keep proving:
 
 - **Gut-feel estimates run several times over actual.** The t-shirt buckets a
   team carries in its head are human-dev denominations, and delivery here is
-  Claude-assisted. On the project this skill came from the median was ×3.
+  Claude-assisted. On the project this skill came from the median was ×3.9.
 - **That ratio is a fact about gut-feel estimating, not a correction to apply
   on top of the table.** Price from the anchors and stop; do not scale the
   result down again.
@@ -77,17 +77,26 @@ with a table in front of it.
 
 On done: actual = journal session time on the task; fallback = ticket create →
 PR created (work usually starts at ticket creation), excluding review-wait.
-Append a row to `references/calibration.md`, marking whether the estimate was
-**anchor-based** or gut-feel.
+Ratio = estimate / actual. Then, in `references/calibration.md`:
 
-**Adjust the anchors when the median ratio of the last 5 _anchor-based_ rows
-leaves [0.7, 1.5]** — anchor-based only. Reading all rows would keep reporting
-the pre-anchor window's ratio forever and demand a downward adjustment that has
-already been applied, shrinking the anchors on every pass. Fewer than 5
-anchor-based rows: adjust a single shape row only when a new actual falls
-outside its printed range, and re-derive that range from its own actuals.
+- **A miss** (ratio below 0.65 or above 1.35) **gets a row**, marked
+  **anchor-based** or gut-feel, its Evidence starting with the done date.
+- **A hit** (within 35%) **gets no row**: append `<key> ×<ratio> <done date>`
+  to the **Hits** line, with `gut` after it when the estimate was gut-feel.
+  Within 35% the estimate is good enough and a row is noise, but the hit still
+  counts below: with misses alone, the median always leaves the band.
+
+**Adjust the anchors when the median ratio of the last 5 anchor-based
+estimates leaves [0.65, 1.35]**, rows and hits together by done date, counting
+only those done after the last adjustment. Gut-feel estimates stay out: they
+would keep reporting the pre-anchor window's ratio forever and demand a
+downward adjustment that has already been applied, shrinking the anchors on
+every pass. Estimates done before the last adjustment stay out too: they
+triggered it, and counting them again fires it at once. Fewer than 5 since the
+last adjustment: adjust a single shape row only when a new actual falls outside
+its printed range, and re-derive that range from its own actuals.
 
 When adjusting, **re-derive each range from the actuals behind it** rather than
 scaling the table — the ranges are measurements, and the `Behind it` column is
-there so the derivation is checkable. Say what moved and why, in the table's
-note.
+there so the derivation is checkable. Say what moved and why, in a dated note:
+its date starts the next window, and the Hits line restarts empty.
