@@ -6,6 +6,18 @@ on:
   pull_request:
 
 jobs:
+  # Renders the worktree-env scripts itself, so once per push, not per answer set.
+  wt-scripts:
+    name: worktree-env scripts corpus
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: false
+      - name: tests/test_wt_start_conf.py (psql/odoo stubbed; the live PostgreSQL case skips)
+        run: uv run --no-project --with jinja2 python tests/test_wt_start_conf.py
+
   generate:
     runs-on: ubuntu-latest
     strategy:

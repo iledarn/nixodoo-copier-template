@@ -54,9 +54,21 @@ flock -u 9
 # (session data_dir/addons farm resolves the installed modules' neutralize.sql).
 bash "$WT_SCRIPT_DIR/wt-link.sh" "$WT_PATH" "$FARM"
 
-cat > "$CONF" <<EOF
+is_loopback() {
+    [[ "$1" =~ ^(::1|localhost|127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})$ ]]
+}
+# Beyond loopback /web/database is open to the LAN, where admin_passwd odoo would back up or
+# drop any DB on this postgres: a fresh random master password there, and list_db off (below).
+ADMIN_PASSWD=odoo
+is_loopback "$WT_HTTP_INTERFACE" || ADMIN_PASSWD="$(head -c 24 /dev/urandom | base64 | tr -d '+/=')"
+
+# It carries both passwords: written 0600 (mktemp) beside the conf and moved over it whole, so
+# no reader meets it half-written and a failed write leaves the previous one (list_db line included).
+CONF_TMP="$(mktemp "$CONF.XXXXXX")"
+trap 'rm -f "$CONF_TMP"' EXIT
+cat > "$CONF_TMP" <<EOF
 [options]
-admin_passwd = odoo
+admin_passwd = $ADMIN_PASSWD
 data_dir = $DATA_DIR
 logfile = $ENV_DIR/odoo.log
 db_host = $WT_DB_HOST
@@ -90,6 +102,8 @@ EOF
 # http_interface it would be ::1, an unbracketed and so invalid URL host; and dbfilter
 # ^%d$ finds the session DB only by a Host whose first label is the DB name, which
 # $HOST is (locally $DB.localhost, resolving to ::1, where the session listens).
+is_loopback "$WT_HTTP_INTERFACE" || sed -i '/^admin_passwd = /a list_db = False' "$CONF_TMP"
+mv "$CONF_TMP" "$CONF"
 
 bash "$WT_SCRIPT_DIR/wt-restore.sh" "$SLUG"
 

@@ -64,4 +64,5 @@ Things that surprised somebody once, kept out of [the README](../README.md) so i
   from `db_user` / `db_password`. Reports read the `report.url` system parameter, not any
   config option, so `wt-start` pins it to the session's own `http://127.0.0.1:<port>`; without
   it a session on a restored production dump renders reports against the dump's
-  `web.base.url`, i.e. production. Corpus: `python3 tests/test_wt_start_conf.py`.
+  `web.base.url`, i.e. production. Corpus: `python3 tests/test_wt_start_conf.py` (needs
+  jinja2), which CI runs once per push in its `wt-scripts` job.

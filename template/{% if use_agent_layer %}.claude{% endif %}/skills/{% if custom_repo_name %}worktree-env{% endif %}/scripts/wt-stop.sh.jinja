@@ -2,7 +2,8 @@
 # Tear down one session env. A CLEAN worktree (committed + pushed) → remove
 # worktree, drop the DB, delete the runtime dir; the branch stays on origin.
 # A DIRTY worktree → keep everything (worktree + env + DB) and report, so no
-# in-progress work is lost. Other sessions are unaffected.
+# in-progress work is lost. Other sessions are unaffected. A wt-test run on the
+# env is waited for first (the env's test lock, wt-common.sh take_test_lock).
 #
 # Usage: wt-stop.sh <slug>
 set -euo pipefail
@@ -15,6 +16,20 @@ SLUG="${1:?usage: wt-stop.sh <slug>}"
 DB="$(db_name_for "$SLUG")"
 WT_PATH="$WT_ROOT/$SLUG"
 ENV_DIR="$WT_ENVROOT/$SLUG"
+
+# 2 (stale): the env was removed while this waited; one re-created since is waited for in turn.
+LOCK_RC=0
+while [ -d "$ENV_DIR" ]; do
+    LOCK_RC=0
+    take_test_lock "$SLUG" "stopping the env" || LOCK_RC=$?
+    [ "$LOCK_RC" -eq 2 ] || break
+done
+if [ "$LOCK_RC" -eq 2 ]; then
+    echo "STATUS: env $SLUG was removed while this waited for its test lock (another wt-stop?): removing what is left"
+elif [ "$LOCK_RC" -ne 0 ] && [ -d "$ENV_DIR" ]; then
+    echo "ERROR: cannot take $ENV_DIR/test.lock: env $SLUG and its service left as they are" >&2
+    exit 1
+fi
 
 systemctl --user stop "odoo{{ service_suffix }}-wt@$SLUG.service" 2>/dev/null || true
 

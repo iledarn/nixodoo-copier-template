@@ -14,6 +14,9 @@ const HOME = homedir();
 const GEMINI_CONFIG_DIR = join(HOME, '.gemini', 'config');
 const ANTIGRAVITY_DIR = process.env.ANTIGRAVITY_APP_DATA_DIR || join(HOME, '.gemini', 'antigravity');
 const BRAIN_DIR = join(ANTIGRAVITY_DIR, 'brain');
+// wt-stop and a restoring wt-start wait out a wt-test run on the env (its test.lock). A kill ends
+// only bash: its children run on while the script's later steps (service restart, teardown) are lost.
+const WT_SCRIPT_TIMEOUT_MS = 60 * 60 * 1000;
 
 const WT_PATH_RE = /\.worktrees\/([A-Za-z0-9][A-Za-z0-9._-]*)/g;
 const WT_SCRIPT_RE = /\bwt-(?:start|stop|bootstrap|restore|link)\.sh\s+([A-Za-z0-9][A-Za-z0-9._-]*)/g;
@@ -935,7 +938,7 @@ app.api('/api/action', async (data) => {
     const slug = String(data?.slug || '').trim();
     if (/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(slug)) {
       const script = join(wsRoot, '.claude', 'skills', 'worktree-env', 'scripts', 'wt-start.sh');
-      const res = await runCmd('bash', [script, slug], wsRoot, 180000);
+      const res = await runCmd('bash', [script, slug], wsRoot, WT_SCRIPT_TIMEOUT_MS);
       message =
         res.exitCode === 0
           ? `Started worktree env ${slug}`
@@ -945,7 +948,7 @@ app.api('/api/action', async (data) => {
     const slug = String(data?.slug || '').trim();
     if (/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(slug)) {
       const script = join(wsRoot, '.claude', 'skills', 'worktree-env', 'scripts', 'wt-stop.sh');
-      const res = await runCmd('bash', [script, slug], wsRoot, 60000);
+      const res = await runCmd('bash', [script, slug], wsRoot, WT_SCRIPT_TIMEOUT_MS);
       message =
         res.exitCode === 0
           ? `Torn down worktree env ${slug}`
