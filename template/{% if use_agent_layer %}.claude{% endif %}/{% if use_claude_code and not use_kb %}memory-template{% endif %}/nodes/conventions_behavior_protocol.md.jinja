@@ -406,10 +406,16 @@ append `[odoo:pending]` instead and mirror at the next natural prod touch.
 
 ### On closing a state item with `[odoo:TASKID]`
 
+{% if task_pr_uri %}
 - Closed as **done** → move the task to the project's done stage (a stage
   with `fold=True`, e.g. Delivered). Gotcha: Delivered requires a
   non-empty `pr_uri` — `write` it first (the PR URL if the work has one,
   else `memory://journal/<date>#<ID>`), then `write` the stage.
+{% else %}
+- Closed as **done** → move the task to the project's done stage (a stage
+  with `fold=True`, e.g. Delivered), then post a `Progress` note with the PR
+  URL if the work has one, else `memory://journal/<date>#<ID>`.
+{% endif %}
 - Closed as **no longer relevant** → the cancel stage (e.g. Canceled).
 - `[odoo:pending]` items close locally only.
 
