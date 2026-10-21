@@ -39,6 +39,8 @@ delivery — deploy, announcement, post-deploy invariant check.
 |---|---|---|---|---|---|
 | | | | | | |
 
+Hits (within 35%, no row; `<key> ×<ratio> <done date>`): none yet.
+
 Notes:
 - (nothing measured yet — the first rows will be gut-feel; tag the first row
   estimated *from* the anchor table as **anchor-based**, because the calibration
@@ -46,5 +48,7 @@ Notes:
 
 ## Appending
 
-One row per done task, same columns. Keep newest at the bottom; prune to the
-~20 most representative rows when the table outgrows one screen.
+One row per missed estimate (ratio below 0.65 or above 1.35), same columns,
+Evidence starting with the done date; a hit goes on the Hits line instead. Keep
+newest at the bottom; prune to the ~20 most representative rows when the table
+outgrows one screen.

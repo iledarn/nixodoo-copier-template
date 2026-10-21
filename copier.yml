@@ -198,6 +198,12 @@ odoo_prod_url:
   default: ""
   when: "{{ tickets_mcp == 'odoo' }}"
 
+task_keys:
+  type: bool
+  help: Does the production Odoo run OCA project_key, so every task carries a key like PROJ-123 (field `key`)? Without it a task's reference is <ticket_prefix>-<id>, its record id behind the prefix, and the ticket skills never read `key`
+  default: false
+  when: "{{ tickets_mcp == 'odoo' }}"
+
 use_pipeline:
   type: bool
   help: Include the pipeline skill (task -> dev -> QC gate -> docs -> demo GIF -> PR orchestrator; runs in isolated worktree envs)?
@@ -215,7 +221,7 @@ task_key_route:
   type: bool
   help: Does the production Odoo open a task by its key at /tasks/<key> (OCA project_key's controller)? The pipeline pane then links every block task to Odoo by its key, with no record URL needed.
   default: false
-  when: "{{ use_pipeline and tickets_mcp == 'odoo' and odoo_prod_url != '' }}"
+  when: "{{ use_pipeline and tickets_mcp == 'odoo' and odoo_prod_url != '' and task_keys }}"
 
 use_kb:
   type: bool
