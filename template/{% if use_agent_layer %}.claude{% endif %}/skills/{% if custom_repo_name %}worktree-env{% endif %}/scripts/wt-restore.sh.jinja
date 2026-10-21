@@ -88,7 +88,7 @@ if [ "$RESTORE_JOBS" -gt 4 ]; then RESTORE_JOBS=4; fi
 STAGING_DB="${DB}_restoring"
 drop_staging() {
     rm -rf "${FILESTORE:?}/$STAGING_DB" || true
-    $PSQL -d postgres -c "DROP DATABASE IF EXISTS $STAGING_DB WITH (FORCE);" >/dev/null
+    drop_db "$STAGING_DB"
 }
 abort_restore() {
     echo "ERROR: $1" >&2
@@ -110,7 +110,7 @@ trap on_exit EXIT
 echo "STATUS: restoring $STAGING_DB from $(basename "$DUMP") … ($RESTORE_JOBS jobs, errors: $RESTORE_LOG)"
 drop_staging
 $PSQL -d postgres -c "CREATE DATABASE $STAGING_DB OWNER {{ db_user }};" >/dev/null
-pg_restore --clean --no-acl --no-owner -j "$RESTORE_JOBS" -h localhost -p {{ postgres_port }} -U {{ db_user }} -d "$STAGING_DB" "$DUMP" 2>"$RESTORE_LOG" || true
+pg_restore --clean --no-acl --no-owner -j "$RESTORE_JOBS" -h "$WT_DB_HOST" -p "$WT_DB_PORT" -U {{ db_user }} -d "$STAGING_DB" "$DUMP" 2>"$RESTORE_LOG" || true
 
 [ "$($PSQL -d "$STAGING_DB" -tAc "SELECT count(*) FROM res_users" 2>/dev/null)" -gt 0 ] 2>/dev/null \
     || abort_restore "restore incomplete (res_users empty) — see $RESTORE_LOG"
@@ -147,7 +147,7 @@ if [ -d "$FILESTORE/$STAGING_DB" ]; then
         mv "$FILESTORE/$STAGING_DB" "$FILESTORE/$DB"
     fi
 fi
-$PSQL -d postgres -c "DROP DATABASE IF EXISTS $DB WITH (FORCE);" >/dev/null
+drop_db "$DB"
 $PSQL -d postgres -c "ALTER DATABASE $STAGING_DB RENAME TO $DB;" >/dev/null
 STAGING_OPEN=""
 echo "STATUS: db-ready ($DB)"

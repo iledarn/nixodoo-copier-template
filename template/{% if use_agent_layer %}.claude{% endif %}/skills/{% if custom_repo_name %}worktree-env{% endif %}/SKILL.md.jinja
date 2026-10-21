@@ -149,6 +149,27 @@ the newest file is used. If `wt-start` reports no dump, ask the user to drop one
   `env['res.users'].browse(<uid>).password = '...'`, commit); the next restore
   resets it. Limit: `report.url` stays pinned to `<URL>`, so wkhtmltopdf fetches
   report assets with the main host's session.
+- **On a shared test server — `WT_*` lines in the project `.env`:** the defaults
+  above are a developer machine. A server whose postgres is another host, and whose
+  sessions are browsed from the LAN, sets (no quotes; `wt-common.sh` reads only these
+  five keys from `.env`):
+
+  ```
+  WT_DB_HOST=<postgres host>        # default localhost
+  WT_DB_PORT=<postgres port>        # default {{ postgres_port }}
+  WT_DB_PASSWORD=<role password>    # default the answers' password
+  WT_HTTP_INTERFACE=0.0.0.0         # default ::1 (loopback only)
+  WT_HOST_SUFFIX=<box>.<domain>     # default localhost
+  ```
+
+  `<URL>` becomes `http://wt_<slug>.<WT_HOST_SUFFIX>:<PORT>` (also `report.url` and
+  the `[queue_job]` host), so `WT_HOST_SUFFIX` needs a **wildcard** DNS record to the
+  box (`*.<box>.<domain>` at any depth, as `*.localhost` is locally); the extra-label
+  trick then reads `wt_<slug>.<user>.<box>.<domain>`. `WT_HTTP_INTERFACE=0.0.0.0`
+  serves the neutralized prod copy (`admin`/`admin`) to that LAN — an explicit
+  opt-in, for a server whose main Odoo already is a LAN test copy. A role that is not
+  a superuser works: session DBs are dropped through `drop_db`, which falls back
+  from `WITH (FORCE)` when an autovacuum worker is on the DB.
 - **Run tests through `wt-test.sh`, never `odoo -c <CONF>` by hand.** A bare run
   breaks three ways: it takes the session's port, so a browser tab still open on
   `<URL>` (logged in, polling its systray and bus) sends its requests into the
