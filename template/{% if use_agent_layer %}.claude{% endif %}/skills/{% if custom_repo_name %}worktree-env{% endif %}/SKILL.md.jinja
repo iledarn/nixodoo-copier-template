@@ -26,7 +26,8 @@ Invoke by absolute path under `${{ project_dir_var }}/.claude/skills/worktree-en
 
 - **`wt-start.sh <slug>`** — bring the env up: add the worktree off `origin/{{ odoo_version }}` as
   branch `<slug>`, allocate a free port, build the session addons farm, restore
-  `wt_<slug>` from the prod seed dump (+ `odoo neutralize` + dev fixups), start
+  `wt_<slug>` from the prod seed dump (+ `odoo neutralize`, an update of the custom
+  modules changed since the dump, dev fixups), start
   `odoo{{ service_suffix }}-wt@<slug>.service`.
   **Idempotent — re-run to refresh** (e.g. after adding a new module dir). Prints
   `WORKTREE:` / `BRANCH:` / `URL:` / `CONF:` / `DB:` / `PORT:` — capture these.
@@ -51,7 +52,8 @@ Invoke by absolute path under `${{ project_dir_var }}/.claude/skills/worktree-en
   `--test-tags` run whose summary reports 0 tests (exit 3: a selector without the
   leading `/`, say). `--test-file` alone is not counted (Odoo prints no summary for
   it); a run whose output has no summary (a `--logfile` of your own) keeps Odoo's
-  exit code and warns.
+  exit code and warns. Runs on one env take turns: a second run waits for the first
+  to end, then runs (see the gotchas).
 - `wt-link.sh <tree> <farm>` / `wt-restore.sh <slug>` — internals used by `wt-start`.
 
 **Slug** = kebab branch name, conventionally `<kio-key-lower>-<short-desc>`
@@ -95,6 +97,24 @@ the newest file is used. If `wt-start` reports no dump, ask the user to drop one
   requeue stuck queue jobs, bump the document sequences past the names the dump
   already carries — imported picking/MO names sit above the sequence, so the Nth
   create would collide on `stock_picking_name_uniq`).
+- **A dump older than the code:** a module that gained a field after the dump was
+  taken makes the registry load fail on the missing column (`column res_users.<field>
+  does not exist`). So between `odoo neutralize` and the dev fixups, `wt-restore.sh`
+  runs one `odoo -u` on the staging DB of the custom modules (dirs with a
+  `__manifest__.py` in the session worktree) whose files differ between the worktree,
+  uncommitted changes included, and the last `origin/{{ odoo_version }}` commit before the dump's
+  day, restricted to the modules installed in the dump. The day comes from the name
+  `<db>_YYYY-MM-DD-HH-MM-SS.dump` and starts at its earliest instant anywhere
+  (UTC+14), whatever the dump host's zone; a dump named otherwise updates every
+  installed custom module and says so in a `WARNING:`. The base is mainline's, never
+  the session branch's: a kept branch's own commits are not in the dump, whatever
+  their date. A kept branch behind mainline gets the modules mainline changed since
+  its fork point updated with its older code: rebase it before `wt-start`. A dependency a changed manifest gained is installed by that `-u`
+  itself; the attachments it writes move with the DB to its final name. The `STATUS:`
+  line names the modules; with nothing changed there is no update. Any failure drops
+  the copy and fails the start, so `wt_<slug>` never exists half-updated: read
+  `.worktrees/_env/<slug>/update.log`. A reused DB (re-run of `wt-start`) is not
+  updated: `-u` it with `wt-test.sh`.
 - **Concurrency:** port allocation + `git worktree add` run under `flock`
   (`.worktrees/.wt.lock`); the slow `pg_restore` runs outside the lock so parallel
   starts overlap. DBs/ports/worktrees are per-slug, so sessions never collide.
@@ -136,6 +156,15 @@ the newest file is used. If `wt-start` reports no dump, ask the user to drop one
   `::1` only, while HttpCase talks to `127.0.0.1`; and `^%d$` maps the Host
   `127.0.0.1` to no database. `wt-test.sh` takes a free port, listens on
   `127.0.0.1` (still loopback only) and passes `--db-filter ^<DB>$`.
+- **Test runs on one env wait for each other.** Two runs on one DB collide: the second
+  died at registry load on a lock timeout (`CREATE UNIQUE INDEX ...`) while the first's
+  `-u` held the tables. `wt-test.sh` holds an exclusive `flock` on
+  `.worktrees/_env/<slug>/test.lock` for the whole Odoo run, so a second run prints
+  that it is waiting and on whom (pid and command), blocks until the first ends, then
+  runs. A run that seems stuck before Odoo starts is waiting there. A command of your
+  own other than `wt-test.sh` takes its turn with
+  `flock "${{ project_dir_var }}/.worktrees/_env/<slug>/test.lock" <command>`; `wt-test.sh` needs no
+  wrapper (wrapped anyway, it finds its caller holding the lock and runs under it).
 - **Reading or checking a session from Claude:** `{{ odoo_cmd }} shell -c <CONF> --no-http`
   with a script on stdin (as a given user: `env = env(user=env.ref('base.user_admin'))`
   or `record.with_user(user)`), or `psql -d wt_<slug>` for plain reads. There is no
