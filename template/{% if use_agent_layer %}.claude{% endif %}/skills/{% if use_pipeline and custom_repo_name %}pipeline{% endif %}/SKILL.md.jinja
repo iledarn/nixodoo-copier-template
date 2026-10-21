@@ -1,3 +1,4 @@
+{% set hours = 'planned_hours' if odoo_version == '16.0' else 'allocated_hours' %}
 ---
 name: pipeline
 description: "Full Odoo development lifecycle orchestrator. Chains subagents: task reading -> dev -> QC gate (review + validation, loops back to dev) -> docs -> demo GIF (optional, on the user's yes) -> PR. Three subagents: dev (writes code), review (read-only QC/review), documenter (writes module docs)."
@@ -94,16 +95,17 @@ grows and how long it lives:
 ---
 
 {% if tickets_mcp == 'odoo' %}
-## Change Tracking (via Odoo Internal Notes + Checklist)
+## Change Tracking (via Odoo Internal Notes{% if task_software_fields %} + Checklist{% endif %})
 
 Track all changes/progress in the Odoo production task — **over the Odoo connector (claude.ai, the user's own account), never claude-in-chrome**. All calls, field conventions, context flags and gotchas live in the **`odoo-tickets` skill** — read it once at pipeline start, follow it for every prod task op below. The connector only ever reaches production; there is no local Odoo MCP. Phase-3 verification targets THIS session through `{{ odoo_cmd }} shell -c <CONF>` (and `psql -d <DB>`), so a check can never land on production by a parked connection.
 
 ### Internal Notes
 On user feedback, a design decision, or an applied fix, post an **internal note** (the connector's `message_post`, per `odoo-tickets`) with:
-- Category prefix: `Requirement Change` / `Design Decision` / `Bug Fix` / `Review Fix` / `User Feedback` / `Progress`
+- Category prefix: `Requirement Change` / `Design Decision` / `Bug Fix` / `Review Fix` / `User Feedback` / `Progress`{% if not task_software_fields %} / `Technical Solution` / `Test Cases` / `Test Case Verification`{% endif +%}
 - What was changed and why
 - Affected files (if applicable)
 
+{% if task_software_fields %}
 ### Task Checklist
 The Checklist tab = `project.task.subtask` records (see `odoo-tickets`):
 1. At the start of Phase 1, read the existing checklist (`search_read` by `task_id`)
@@ -111,6 +113,7 @@ The Checklist tab = `project.task.subtask` records (see `odoo-tickets`):
 3. As each step completes, `write {"state": "done"}`
 4. Add new steps discovered during development
 
+{% endif %}
 ### Sub-tasks & Blockers (task↔task links)
 
 Two task↔task link tabs the orchestrator maintains (fields + calls in
@@ -372,28 +375,40 @@ Before spawning any subagent:
 {% endif %}
    - Read the form content with explicit field lists (heavy Html fields for
      this ONE task only):
-     - `read [id] ["name", {% if task_keys %}"key", {% endif %}"stage_id", "user_ids", "task_type", "tshirt_estimate", "planned_hours", "effective_hours", "date_deadline", "child_ids", "depend_on_ids"]`
+     - `read [id] ["name", {% if task_keys %}"key", {% endif %}"stage_id", "user_ids", {% if task_software_fields %}"task_type", "tshirt_estimate", {% endif %}"{{ hours }}", "effective_hours", "date_deadline", "child_ids", "depend_on_ids"]`
        — note any existing **Sub-tasks** (`child_ids`) and **Blocked By**
        (`depend_on_ids`); if `depend_on_ids` is non-empty the task may already
        be blocked, flag it to the user before starting.
      - **Description**: `read [id] ["description"]` — functional requirements
+{% if task_software_fields %}
      - **Technical Solution**: `read [id] ["solution"]` (+ `questions`/`answers` if used)
      - **Test Cases**: `search_read` `project.task.testcase` by `task_id`,
        fields `["name", "state", "passed", "steps_to_execute", "expected_results"]`
      - **Checklist**: `search_read` `project.task.subtask` by `task_id`,
        fields `["name", "state", "user_id"]`
+{% else %}
+     - **Internal notes** (`Design Decision` Q&A, `Technical Solution`,
+       `Test Cases`, per `odoo-tickets`): `search_read` `mail.message`
+       `[["model", "=", "project.task"], ["res_id", "=", <id>], ["message_type", "=", "comment"]]`,
+       fields `["date", "author_id", "body"]`, order `"date asc"`
+{% endif %}
 
 1. **Take the ticket into work** (start-work flow from `odoo-tickets`) —
-   after step 0, because the status ETA needs `planned_hours` /
+   after step 0, because the status ETA needs `{{ hours }}` /
    `effective_hours` / `date_deadline`:
    - move it to the **Development** stage (`write {"stage_id": …}` with
      `tracking_disable` context); assign the owner if unassigned
 {% if status_mcp == 'teams' %}
    - **Rebalance the user's other deadlines** — a new in-scope ticket pushes
      existing work out, so run the `my-status` `rebalance` flow now (it
+{% if task_timeline %}
      re-estimates and shifts the **Planned Dates** window
      `planned_date_start`/`planned_date_end` — and `date_deadline` in sync — of
      the user's other open assigned tasks to absorb this one). See `my-status`.
+{% else %}
+     re-estimates and shifts the `date_deadline` of the user's other open
+     assigned tasks to absorb this one). See `my-status`.
+{% endif %}
    - **Send the Teams status — and treat it as a HARD GATE: do NOT start
      Phase 2 until the status is actually sent.** Run the `my-status` `send`
      flow (current ticket + ETA + next up, draft → explicit user go → IT team
@@ -429,6 +444,7 @@ Before spawning any subagent:
      and a real ambiguity discovered in ANY later phase re-opens a focused
      grill round.
 
+{% if task_software_fields %}
    **Persist every clarifying round to the task's Technical Solution tab**
    per `odoo-tickets` (`questions` / `answers` Html fields):
    - `questions` ← the questions you asked, `answers` ← the user's answers, as
@@ -441,18 +457,38 @@ Before spawning any subagent:
      matching internal note (`Requirement Change` / `Design Decision`).
    - The grill's stakeholder-questions list and assumptions ledger go to the
      ticket too (Technical Solution or a note) — never chat-only.
+{% else %}
+   **Persist every clarifying round to the task as a `Design Decision`
+   internal note** per `odoo-tickets`:
+   - the questions you asked and the user's answers, as parallel numbered
+     lists so Q1↔A1; one note per round, earlier rounds stay as they are.
+   - This applies to **every** clarifying exchange about the task — the grill
+     rounds here, and anything later in the pipeline (e.g. mid-development
+     feedback), not just the first round.
+   - When an answer changes scope, also post a `Requirement Change` note.
+   - The grill's stakeholder-questions list and assumptions ledger go to the
+     ticket too (a note) — never chat-only.
+{% endif %}
 
+{% if task_software_fields %}
 3. **Enrich Technical Solution** — when the `solution` tab is empty, under ~50 words, or lacks implementation specifics (just restates the description):
+{% else %}
+3. **Enrich Technical Solution** — when the task has no `Technical Solution` note, or the latest one is under ~50 words or lacks implementation specifics (just restates the description):
+{% endif %}
    a. Analyze the Description tab content **and any answers captured in the previous step**
    b. Spawn an **Explore** agent to research the affected modules:
       > Explore the codebase for: <key models/features mentioned in description>.
       > Find: existing models, fields, views, security rules, and patterns.
       > Report: file paths, model names, existing field names, view IDs.
    c. Produce a Technical Solution from description + codebase analysis using the template below
+{% if task_software_fields %}
    d. Write to the task: `write [id] {"solution": "<html>"}` with the quiet context (per `odoo-tickets`)
    e. Post an internal note: "Technical Solution auto-generated by pipeline based on task description and codebase analysis"
+{% else %}
+   d. Post it as a `Technical Solution` internal note (per `odoo-tickets`), its first line "Technical Solution auto-generated by pipeline based on task description and codebase analysis"
+{% endif %}
 
-   **Structured Template** (use as HTML for Odoo's rich text field):
+   **Structured Template** (use as HTML for {% if task_software_fields %}Odoo's rich text field{% else %}the note body{% endif %}):
 
    ```
    ## Affected Models
@@ -489,7 +525,11 @@ Before spawning any subagent:
 
    **Important**: Adapt the template — skip/add sections as needed. Goal is actionable technical clarity, not filling every section.
 
+{% if task_software_fields %}
 4. **Populate Test Cases** — when the Test Cases tab is empty or has fewer than 3 cases, create comprehensive `project.task.testcase` records over the Odoo connector:
+{% else %}
+4. **Populate Test Cases** — when the task has no `Test Cases` note, or it lists fewer than 3 cases, post a comprehensive one over the Odoo connector:
+{% endif %}
 
    a. Derive test cases from the Description + Technical Solution
    b. Cover ALL of these categories:
@@ -506,19 +546,27 @@ Before spawning any subagent:
       - **Steps**: Numbered, specific actions (e.g. "1. Login as user without assignor role. 2. Open task {{ ticket_prefix }}-xxx. 3. Try to change stage to Development.")
       - **Expected result**: Exact expected outcome (e.g. "Error message: 'You are not authorized to change the stage'. Stage remains unchanged.")
 
+{% if task_software_fields %}
    d. Write test cases as `project.task.testcase` records (per `odoo-tickets`):
       `create {"task_id": <id>, "name": "<scenario>",
       "steps_to_execute": "<ol>…</ol>", "expected_results": "<p>…</p>"}` —
       one create per case, state defaults to `todo`
 
    e. Post an internal note: "Test Cases auto-generated by pipeline — N test cases covering happy path, edge cases, access control, and regression."
+{% else %}
+   d. Post them as one `Test Cases` internal note (per `odoo-tickets`): the
+      cases numbered, each its name, steps and expected result; first line
+      "Test Cases auto-generated by pipeline — N test cases covering happy path, edge cases, access control, and regression."
+{% endif %}
 
    **Aim for 8-15 test cases** depending on complexity — more for security/access-control features, fewer for simple UI tweaks.
 
+{% if task_software_fields %}
 5. **Initialize the checklist**:
    - If empty, populate with implementation steps derived from the (now-available) Technical Solution
    - If it has items, read them as part of the requirements
 
+{% endif %}
 {% else %}
 0. **Read the task** — gather requirements from the user's description (and any
    linked docs). For a **feature-shaped** task (new module, new
@@ -554,7 +602,7 @@ Before spawning any subagent:
    never touched. (Prereq: a seed dump in `backup/` — if `wt-start`
    reports none, ask the user to {% if backup_s3_bucket %}run `nix run .#download-backup` once{% else %}drop a prod dump into `backup/`{% endif %} first.)
 
-Report: "Starting pipeline for: <TASK-KEY> — <task summary>". Add the grill-gate outcome: "Grill gate: Alignment Summary confirmed (N questions, M assumptions)" or "Grill gate: skipped (mechanical task)".{% if tickets_mcp == 'odoo' %} If clarifying questions were asked, add "N clarifying Q&A captured to the Technical Solution tab." If Technical Solution was enriched, add "Technical Solution auto-generated and written to the task. Please review." If Test Cases were generated, add "N test cases written to Test Cases tab."{% endif %}
+Report: "Starting pipeline for: <TASK-KEY> — <task summary>". Add the grill-gate outcome: "Grill gate: Alignment Summary confirmed (N questions, M assumptions)" or "Grill gate: skipped (mechanical task)".{% if tickets_mcp == 'odoo' %} {% if task_software_fields %}If clarifying questions were asked, add "N clarifying Q&A captured to the Technical Solution tab." If Technical Solution was enriched, add "Technical Solution auto-generated and written to the task. Please review." If Test Cases were generated, add "N test cases written to Test Cases tab."{% else %}If clarifying questions were asked, add "N clarifying Q&A posted as Design Decision notes." If Technical Solution was enriched, add "Technical Solution auto-generated and posted as a note. Please review." If Test Cases were generated, add "N test cases posted as a Test Cases note."{% endif %}{% endif %}
 
 ---
 
@@ -682,6 +730,7 @@ returns no closing block. The fix brief waits for every verdict.
    module/menu → verify new fields visible, test buttons, check flows →
    `read_console_messages` for JS errors.
 {% if tickets_mcp == 'odoo' %}
+{% if task_software_fields %}
 6. **Test Case Verification (MANDATORY)** — verify EVERY test case from the
    **Test Cases** tab populated in Phase 1. Do NOT skip; if one can't be
    verified automatically (e.g. needs specific data setup), document what was
@@ -695,6 +744,20 @@ returns no closing block. The fix brief waits for every verdict.
      "state": "done"}`; failed → keep `todo`, add details to `comments`.
    - **Post summary internal note**: "Test Case Verification: X/Y passed.
      [Details of any failures and fixes]"
+{% else %}
+6. **Test Case Verification (MANDATORY)** — verify EVERY test case from the
+   task's `Test Cases` note posted in Phase 1. Do NOT skip; if one can't be
+   verified automatically (e.g. needs specific data setup), document what was
+   checked and any limitations.
+   - **Read over the Odoo connector** (production): the latest `Test Cases`
+     note (`mail.message` search as in Phase 1 step 0).
+   - **Execute each**: backend via the Odoo shell on the session
+     (`{{ odoo_cmd }} shell -c <CONF>`) or Python tests; UI via Chrome on `<URL>`; access
+     control via `with_user()` in shell or by switching users in browser.
+   - **Post a `Test Case Verification` note** (per `odoo-tickets`): "X/Y
+     passed", then per case passed / failed (what failed) / not applicable,
+     and any fixes.
+{% endif %}
 {% else %}
 6. **Requirements verification** — walk every requirement gathered in Phase 1
    and verify it against the running session (backend + UI); document what was
@@ -917,9 +980,12 @@ from a green pipeline or a merged/awaiting-review PR.
 
 
 - **Pipeline succeeded + PR merged** → `kb done <WIP_ID> "PR <url> merged"`{% if tickets_mcp == 'odoo' %}, and close
+{% if task_pr_uri %}
   the ticket per `odoo-tickets`: `write {"pr_uri": "<PR URL>"}` first, then
   `write {"stage_id": <Delivered>}` (Delivered with empty `pr_uri` is
-  blocked by a prod automation){% endif %}
+  blocked by a prod automation){% else %}
+  the ticket per `odoo-tickets`: `write {"stage_id": <Delivered>}`, then a
+  `Progress` note with the PR URL{% endif %}{% endif %}
 
 - **Pipeline succeeded + PR awaiting review** → `kb append <WIP_ID> "PR <url> awaiting review"`;
   the task stays open{% if tickets_mcp == 'odoo' %}, the ticket stays in Development and closes when the merged PR deploys{% endif %}.
@@ -947,9 +1013,14 @@ A thread becomes a ticket only when the user asks for one{% if tickets_mcp == 'o
 Read `$STATE`, find the line with `[WIP_ID]` created in Phase 0 (it carries ` [odoo:<task_id>]` since Phase 1), and:
 
 - **Pipeline succeeded + PR merged** → delete the line entirely, and close
+{% if task_pr_uri %}
   the ticket per `odoo-tickets`: `write {"pr_uri": "<PR URL>"}` first, then
   `write {"stage_id": <Delivered>}` (Delivered with empty `pr_uri` is
   blocked by a prod automation)
+{% else %}
+  the ticket per `odoo-tickets`: `write {"stage_id": <Delivered>}`, then a
+  `Progress` note with the PR URL
+{% endif %}
 - **Pipeline succeeded + PR awaiting review** → move from `## WIP`
   to `## Ready for review`, keep the `[odoo:<task_id>]` suffix:
   ```
@@ -1087,9 +1158,15 @@ append AFTER existing content.
 
 {% if tickets_mcp == 'odoo' %}
 1. **Post internal note** to the Odoo task documenting feedback
+{% if task_software_fields %}
 2. **Capture clarifying Q&A**: if the feedback answered a question you asked,
    append the Q→A pair to the task's `questions` / `answers` fields per
    `odoo-tickets` (Phase 1 step 2 convention) — don't leave it only in chat
+{% else %}
+2. **Capture clarifying Q&A**: if the feedback answered a question you asked,
+   post the Q→A pair as a `Design Decision` note per `odoo-tickets` (Phase 1
+   step 2 convention) — don't leave it only in chat
+{% endif %}
 {% endif %}
 3. **Determine impact**: a *requirement change* (the domain model shifted, not
    just a bug) → run a focused `grill` round first and update
@@ -1097,7 +1174,7 @@ append AFTER existing content.
    re-run the Phase 3 gate
 4. **Apply the change** via a fresh `dev` agent with a brief; `SendMessage` only
    reaches a `dev` whose job is still running
-{% if tickets_mcp == 'odoo' %}
+{% if tickets_mcp == 'odoo' and task_software_fields %}
 5. **Update checklist** in Odoo task if steps changed
 {% endif %}
 6. **Report** what was changed
@@ -1130,10 +1207,10 @@ Final summary:
 - Demo GIF: <attached / skipped (user's call)>
 - PR: <URL>
 {% if tickets_mcp == 'odoo' %}
-- Odoo task: checklist updated, internal notes posted
+- Odoo task: {% if task_software_fields %}checklist updated, {% endif %}internal notes posted
 {% endif %}
 ```
-{% if tickets_mcp == 'odoo' %}
+{% if tickets_mcp == 'odoo' and task_software_fields %}
 
 At the end, mark all completed checklist items over the Odoo connector (`project.task.subtask` → `write {"state": "done"}`).
 {% endif %}

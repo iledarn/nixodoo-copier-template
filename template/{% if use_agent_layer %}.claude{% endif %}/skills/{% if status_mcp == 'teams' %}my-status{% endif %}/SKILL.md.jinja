@@ -1,4 +1,9 @@
 {% set identity = 'record' if use_kb else 'node' %}
+{% set v16 = odoo_version == '16.0' %}
+{% set hours = 'planned_hours' if v16 else 'allocated_hours' %}
+{% set open_domain = '["is_closed", "=", false]' if v16 else '["state", "not in", ["1_done", "1_canceled"]]' %}
+{% set written = (['planned_date_start', 'planned_date_end'] if task_timeline else []) + ['date_deadline', hours] + (['tshirt_estimate'] if task_software_fields else []) %}
+{% set written_fields = '`' ~ written | join('` / `') ~ '`' %}
 ---
 name: my-status
 description: "My work status from PRODUCTION Odoo. list (default): open tasks. send: post today's plan to the Teams chat from the user_identity {{ identity }} (only tasks planned to close today, each with estimate + link; backlog shown to you for swaps, never posted). rebalance: when a new task enters scope, re-estimate and shift the date_deadline of your other open assigned tasks to absorb it — the ONLY mode that writes (date_deadline/estimate on your own tasks only). Use when the user asks 'what are my tasks', 'my open tasks', 'send my status to the team', or when scope grows and deadlines need rebalancing."
@@ -57,12 +62,12 @@ overrides the {{ identity }} (list mode only).
 2. Resolve uid: `search_read` `res.users`, `[["login", "=", "<login>"]]`,
    fields `["id", "name"]`; empty → retry on `email`; still empty → stop, say so.
 3. Open tasks: `search_read` `project.task`,
-   domain `[["user_ids", "in", [<uid>]], ["is_closed", "=", false]]`,
-   fields `[{% if task_keys %}"key", {% endif %}"name", "project_id", "stage_id", "date_deadline", "priority", "kanban_state"]`,
+   domain `[["user_ids", "in", [<uid>]], {{ open_domain }}]`,
+   fields `[{% if task_keys %}"key", {% endif %}"name", "project_id", "stage_id", "date_deadline", "priority", "{{ 'kanban_state' if v16 else 'state' }}"]`,
    order `"date_deadline asc, priority desc"`.
 4. Report: total count, grouped by project, one line per task:
    `<key> name — stage — deadline` (e.g. `{{ ticket_prefix }}-1064 …`) + `⚠️ overdue` / `⭐`
-   (priority `"1"`) / `⛔` (kanban_state `"blocked"`), each linked.{% if task_keys %} **Never show
+   (priority `"1"`) / `⛔` ({% if v16 %}kanban_state `"blocked"`{% else %}state `"04_waiting_normal"`{% endif %}), each linked.{% if task_keys %} **Never show
    the numeric id.**{% endif %} No tasks → say exactly that.
 
 ## Steps — send mode
@@ -71,14 +76,14 @@ overrides the {{ identity }} (list mode only).
 3. **Candidate tasks** = all open tasks, ordered by **sequence** (manual
    board/priority order):
    `search_read` `project.task`,
-   domain `[["user_ids", "in", [<uid>]], ["is_closed", "=", false]]`,
-   fields `[{% if task_keys %}"key", {% endif %}"name", "project_id", "stage_id", "date_deadline", "planned_hours", "effective_hours", "kanban_state", "sequence", "priority"]`,
+   domain `[["user_ids", "in", [<uid>]], {{ open_domain }}]`,
+   fields `[{% if task_keys %}"key", {% endif %}"name", "project_id", "stage_id", "date_deadline", "{{ hours }}", "effective_hours", "{{ 'kanban_state' if v16 else 'state' }}", "sequence", "priority"]`,
    order `"sequence asc, date_deadline asc, id asc"`.
    (Cost rule: never request `description`.) None found → status says
    "no open tasks"; stop.
 4. **Estimate & propose today's plan.** Walk the sequence-ordered list and
    estimate each task's *remaining* effort. Base each estimate, in order of
-   preference, on: `date_deadline`; `planned_hours` vs `effective_hours`; what
+   preference, on: `date_deadline`; `{{ hours }}` vs `effective_hours`; what
    this session knows about the work; task messages. Budget ~6 focused h/day —
    top tasks (by sequence) whose estimates fit that budget are the proposed
    **"Planned for today"** set; the rest are backlog. Thin evidence → mark "low
@@ -128,11 +133,16 @@ guard (step 8).
 
 1–2. Same connector check + uid resolution as list mode.
 3. **Candidate tasks** = all open assigned tasks ordered by **sequence** — same
+{% if task_timeline and task_software_fields %}
    `search_read` as send-mode step 3, fields incl. `planned_date_start`,
-   `planned_date_end`, `date_deadline`, `planned_hours`, `effective_hours`,
+   `planned_date_end`, `date_deadline`, `{{ hours }}`, `effective_hours`,
    `tshirt_estimate`, `sequence`. The just-added task is in this list.
+{% else %}
+   `search_read` as send-mode step 3, fields incl. {{ written_fields | replace(' / ', ', ') }},
+   `effective_hours`, `sequence`. The just-added task is in this list.
+{% endif %}
 4. **Estimate remaining effort** per task (same heuristic as send-mode step 4:
-   `date_deadline` / `planned_hours` vs `effective_hours` / what this session
+   `date_deadline` / `{{ hours }}` vs `effective_hours` / what this session
    knows / task messages). Thin evidence → low confidence; never invent
    precision.
 5. **Compute a realistic schedule of work windows** — walk the sequence order
@@ -140,10 +150,11 @@ guard (step 8).
    days; each task gets a window `[start, finish]` = the consecutive working
    days its estimate occupies. The new task takes the first window and displaces
    everything sequenced after it, pushing those windows out.
+{% if task_timeline %}
 6. **Decide the writes** — the **Planned Dates** range is what drives scheduling
    (Gantt / team dashboard / overdue colouring), so shift THAT, not just the
    Deadline (`planned_date_start`/`planned_date_end` are `datetime`,
-   `date_deadline` is `date`):
+   `date_deadline` is `{{ 'date' if v16 else 'datetime' }}`):
    - `planned_date_start` ← the window start; `planned_date_end` ← the window
      finish. Day-level granularity is enough — pick a sensible work-hour boundary
      (e.g. `YYYY-MM-DD 09:00:00` / `18:00:00`); exact intraday time + TZ aren't
@@ -153,9 +164,22 @@ guard (step 8).
    - Conservative: only push windows **out** (later) to absorb the new work, or
      fill a missing window; never force an **earlier** start/deadline unless the
      user asks.
-   - estimate: if a task has no `planned_hours`/`tshirt_estimate`, set
-     `planned_hours` to the computed estimate; if scope was added to an existing
+{% else %}
+6. **Decide the writes** — `date_deadline` (`{{ 'date' if v16 else 'datetime' }}`) ← the window
+   finish; day-level granularity is enough.
+   - Conservative: only push deadlines **out** (later) to absorb the new work,
+     or fill a missing one; never force an **earlier** deadline unless the user
+     asks.
+{% endif %}
+{% if task_software_fields %}
+   - estimate: if a task has no `{{ hours }}`/`tshirt_estimate`, set
+     `{{ hours }}` to the computed estimate; if scope was added to an existing
      task, bump its estimate to match.
+{% else %}
+   - estimate: if a task has no `{{ hours }}`, set it to the computed
+     estimate; if scope was added to an existing task, bump its estimate to
+     match.
+{% endif %}
 7. **Apply + report.** Rebalance-on-scope-growth is durably authorized by the
    user, so when **invoked by the pipeline** write the changes and then report
    the before→after diff (one `write` per task, or batched by
@@ -166,18 +190,26 @@ guard (step 8).
    "mail_auto_subscribe_no_notify": true, "tracking_disable": true}`
    (`date_deadline` is tracked).
 8. **Scope guard — never exceed:** only the user's **own** open assigned tasks
-   (`user_ids` contains the resolved uid, `is_closed = false`); only the
-   `planned_date_start` / `planned_date_end` / `date_deadline` / `planned_hours`
+   (`user_ids` contains the resolved uid, {% if v16 %}`is_closed = false`{% else %}`state` not `1_done` / `1_canceled`{% endif %}); only the
+{% if task_timeline and task_software_fields %}
+   `planned_date_start` / `planned_date_end` / `date_deadline` / `{{ hours }}`
    / `tshirt_estimate` fields; never another person's tasks, never any other
+{% else %}
+   {{ written_fields }} fields; never another person's tasks, never any other
+{% endif %}
    field, never closed tasks. Report each change as `<{{ ticket_prefix }} key> <name>:
+{% if task_timeline %}
    <old planned_date_end> → <new planned_date_end>` (the Planned Dates window).
+{% else %}
+   <old date_deadline> → <new date_deadline>`.
+{% endif %}
 
 ## Write rules
 
 - Odoo: **list** and **send** are read-only — only `search_read` /
   `fields_get`. The **single** write path is **rebalance**, and only within its
-  scope guard (rebalance step 8): `planned_date_start` / `planned_date_end` /
-  `date_deadline` / `planned_hours` / `tshirt_estimate` on the user's **own**
+  scope guard (rebalance step 8): {% if task_timeline and task_software_fields %}`planned_date_start` / `planned_date_end` /
+  `date_deadline` / `{{ hours }}` / `tshirt_estimate`{% else %}{{ written_fields }}{% endif %} on the user's **own**
   open assigned tasks, via `write` with the quiet + `tracking_disable`
   context (`execute` only as the `odoo-tickets` fallback). Nothing else here writes.
 {% if not use_kb %}

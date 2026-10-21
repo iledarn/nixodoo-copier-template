@@ -23,6 +23,9 @@ Defaults in the table; anything you leave empty turns its feature off. See [the 
 | `tickets_mcp` | `none` (or `odoo` → odoo-tickets skill, ticket links, `ODOO_*_PROD` in `.env`) |
 | `odoo_prod_url` | asked when `tickets_mcp=odoo` |
 | `task_keys` (prod Odoo runs OCA project_key: every task has a `key` like PROJ-123; `task_key_route` is asked only then) | `false` → a task's reference is `<ticket_prefix>-<id>`, looked up by its record id |
+| `task_software_fields` (prod Odoo runs kaertech_project_software: `project.task` fields `task_type`, `tshirt_estimate`, `priority_level`, `difficulty`, `knowledge_area_level`, `questions`, `answers`, `solution`, models `project.task.testcase` and `project.task.subtask`) | `false` → the ticket skills never read them; clarifying Q&A, the technical solution and test cases go to internal notes; no checklist |
+| `task_timeline` (prod Odoo runs OCA project_timeline: `planned_date_start` / `planned_date_end`) | `false` → a task is scheduled by `date_deadline` alone |
+| `task_pr_uri` (prod Odoo runs OCA project_task_pull_request: `pr_uri`, required before the done stage) | `false` → a task closes by its stage move; the PR link goes to a `Progress` note |
 | `use_pipeline` | `true` (asked when a custom addons repo is set) |
 | `extra_ticket_prefixes` (more ticket prefixes the pipeline takes as task keys, e.g. a second project's) | empty → `ticket_prefix` alone |
 | `use_kb` | `false` — SessionStart hook: `kb index` + `kb today` into every session (needs `kb` from okolovmark/kb; silent when absent) |
