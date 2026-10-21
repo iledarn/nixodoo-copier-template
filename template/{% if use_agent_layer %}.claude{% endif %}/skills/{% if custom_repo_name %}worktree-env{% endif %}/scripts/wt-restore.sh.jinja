@@ -12,7 +12,8 @@
 # A dump older than the code otherwise fails the registry load on a column added
 # since. The day starts at its earliest instant anywhere (UTC+14), as the name's
 # clock is the dump host's: a needless update costs minutes, a missed one breaks
-# the session.
+# the session. A module the update newly installs (a dependency a changed manifest
+# gained) missed `odoo neutralize`: its own neutralization queries run after it.
 # Needs the session odoo.conf and worktree — wt-start makes both first.
 # All of it runs under wt_<slug>_restoring; the DB takes its real name only once
 # neutralized and updated, so the session's service never sees the raw copy, and
@@ -94,6 +95,19 @@ abort_restore() {
     echo "ERROR: $1" >&2
     exit 1
 }
+# Odoo's own per-module queries (what `odoo neutralize` runs for every installed module) for
+# the comma-separated modules $1 only. The shell rolls back on exit, hence the commit.
+# --stop-after-init: the shell still reads stdin, and queue_job starts no runner (its stop waits 5 s).
+neutralize_modules() {
+    WT_NEUTRALIZE_MODULES="$1" {{ project_dir_var }}="$PROJ" "$ODOO_BIN" shell -c "$CONF" -d "$STAGING_DB" --no-http \
+        --stop-after-init --logfile="$UPDATE_LOG" <<'PY'
+import os
+from odoo.modules.neutralize import get_neutralization_queries
+for query in get_neutralization_queries(os.environ["WT_NEUTRALIZE_MODULES"].split(",")):
+    env.cr.execute(query)
+env.cr.commit()
+PY
+}
 # Until the rename every exit drops the copy, set -e's included: a neutralized but
 # unfinished copy left behind would only confuse the next run.
 STAGING_OPEN=1
@@ -132,10 +146,24 @@ else
     {{ project_dir_var }}="$PROJ" "$ODOO_BIN" -c "$CONF" -d "$STAGING_DB" -u "$UPDATE_MODULES" --stop-after-init --logfile="$UPDATE_LOG" \
         || { tail -n 20 "$UPDATE_LOG" >&2 || true
              abort_restore "updating $UPDATE_MODULES failed (log: $UPDATE_LOG)"; }
+    INSTALLED_AFTER="$($PSQL -d "$STAGING_DB" -tAc "SELECT name FROM ir_module_module WHERE state IN ('installed', 'to upgrade')")" \
+        || abort_restore "cannot read the installed modules of $STAGING_DB after the update"
+    NEW_MODULES="$(LC_ALL=C comm -13 <(LC_ALL=C sort -u <<< "$INSTALLED") <(LC_ALL=C sort -u <<< "$INSTALLED_AFTER") | paste -sd, -)"
+    if [ -n "$NEW_MODULES" ]; then
+        echo "STATUS: neutralizing the modules the update installed: $NEW_MODULES …"
+        neutralize_modules "$NEW_MODULES" || abort_restore "neutralizing $NEW_MODULES failed (log: $UPDATE_LOG)"
+    fi
 fi
 
 # Dev fixups (psql continues past any table this dump lacks).
 $PSQL -d "$STAGING_DB" -f "$PROJ/nix/scripts/dev-fixup.sql" || true
+
+# drop_db ends every connection to an existing wt_<slug> (db-incomplete): a wt-test run on it is
+# waited for, not killed. Taken before the filestore move, which a running test writes beside.
+LOCK_RC=0
+take_test_lock "$SLUG" "replacing $DB" || LOCK_RC=$?
+[ "$LOCK_RC" -ne 1 ] || abort_restore "cannot take $WT_ENVROOT/$SLUG/test.lock to replace $DB"
+[ "$LOCK_RC" -eq 0 ] || abort_restore "env $SLUG was stopped while the restore waited for its test lock"
 
 # Attachments live under filestore/<db name>, which a SQL rename leaves behind: moved first, so
 # wt_<slug> never exists without them. Content-addressed, so merging into an older dir is safe.

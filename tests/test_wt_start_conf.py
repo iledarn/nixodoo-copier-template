@@ -11,9 +11,11 @@ with an answer set and reads the [options] block back.
 
 The wt-test.sh cases run the rendered wrapper with psql and odoo stubbed, plus
 its module-state query against a live PostgreSQL when one answers (else skip).
-The Claude-worktree cases run the rendered wt-start.sh up to its bootstrap step.
+The Claude-worktree cases run the rendered wt-start.sh up to its bootstrap step,
+the exposure cases all of it with its helper scripts, git and psql stubbed.
 The wt-restore.sh cases run it with psql, pg_restore and odoo stubbed on a
-worktree with a scripted git history.
+worktree with a scripted git history. The wt-stop.sh cases share wt-test.sh's stubs.
+CI runs this file once per push (the wt-scripts job); it needs jinja2, bash, flock and git.
 """
 
 import itertools
@@ -35,6 +37,7 @@ SRC = pathlib.Path(
     "/{% if custom_repo_name %}worktree-env{% endif %}/scripts/wt-start.sh.jinja"
 )
 TEST_SRC = SRC.with_name("wt-test.sh.jinja")
+STOP_SRC = SRC.with_name("wt-stop.sh.jinja")
 COMMON_SRC = SRC.with_name("wt-common.sh.jinja")
 
 BASE = dict(
@@ -49,7 +52,10 @@ def render(**answers):
 
 
 def sections(text):
-    block = re.search(r'cat > "\$CONF" <<EOF\n(.*?)\nEOF\n', text, re.S).group(1)
+    return parse_conf(re.search(r'cat > "\$\w+" <<EOF\n(.*?)\nEOF\n', text, re.S).group(1))
+
+
+def parse_conf(block):
     found, current = {}, None
     for line in block.splitlines():
         if re.fullmatch(r"\[[a-z_]+\]", line):
@@ -245,11 +251,12 @@ def psql_vars(argv):
     return dict(argv[i + 1].split("=", 1) for i, arg in enumerate(argv or []) if arg == "-v")
 
 
-def wt_test_project(root, odoo_body, missing="", psql_rc=0, psql_body="", python_body=""):
-    """Lay out a project at `root` with the rendered wt-test.sh for slug `x`, psql and odoo stubbed.
+def wt_test_project(root, odoo_body, missing="", psql_rc=0, psql_body="", python_body="", systemctl_body=""):
+    """Lay out a project at `root` with the rendered wt-test.sh and wt-stop.sh for slug `x`,
+    psql, odoo and systemctl stubbed.
 
     The psql stub runs `psql_body`, answers the module-state query with `missing`
-    and exits `psql_rc`; the odoo stub runs `odoo_body`. With `python_body`, a
+    and exits `psql_rc`; the odoo stub runs `odoo_body`, systemctl `systemctl_body`. With `python_body`, a
     python3 on PATH runs it before the real one. Returns the command of a run and
     its environment.
     """
@@ -257,13 +264,14 @@ def wt_test_project(root, odoo_body, missing="", psql_rc=0, psql_body="", python
     for d in (scripts, bin_dir, odoo_bin, root / ".worktrees/_env/x"):
         d.mkdir(parents=True)
     (root / ".worktrees/_env/x/odoo.conf").write_text("[options]\n")
-    for src in (TEST_SRC, TEST_SRC.with_name("wt-common.sh.jinja")):
+    for src in (TEST_SRC, STOP_SRC, COMMON_SRC):
         (scripts / src.name.removesuffix(".jinja")).write_text(render_script(src))
     (bin_dir / "psql").write_text(stub(root / "psql.argv", f"{psql_body}cat > /dev/null\n"
                                                            f"printf '%s' {shlex.quote(missing)}\nexit {psql_rc}\n"))
     (odoo_bin / "odoo").write_text(stub(root / "odoo.argv", odoo_body))
     (bin_dir / "python3").write_text(f'#!/usr/bin/env bash\n{python_body}exec {shlex.quote(sys.executable)} "$@"\n')
-    for f in (bin_dir / "psql", odoo_bin / "odoo", bin_dir / "python3"):
+    (bin_dir / "systemctl").write_text(f"#!/usr/bin/env bash\n{systemctl_body}")
+    for f in (bin_dir / "psql", odoo_bin / "odoo", bin_dir / "python3", bin_dir / "systemctl"):
         f.chmod(0o755)
     env = {**os.environ, "HOME": str(root), "WT_TEST_PROJECT_DIR": str(root), "PATH": f"{bin_dir}:{os.environ['PATH']}"}
     return ["bash", str(scripts / "wt-test.sh"), "x"], env
@@ -299,7 +307,8 @@ def wait_for(predicate, what, timeout=10):
 def start_bg(cmd, env, out_path):
     """Start `cmd` in its own process group, its output going to `out_path`."""
     with open(out_path, "w") as out:
-        return subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT, env=env, start_new_session=True)
+        return subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, env=env,
+                                start_new_session=True)
 
 
 def finish_bg(procs, timeout=30):
@@ -394,6 +403,249 @@ def a_lone_run_holds_the_env_test_lock_without_waiting():
         proc = subprocess.run([*cmd, "--test-enable"], capture_output=True, text=True, env=env)
         out = proc.stdout + proc.stderr
         assert proc.returncode == 0 and "lock held" in out and "waiting" not in out, (proc.returncode, out)
+
+
+def hold_lock(lock, env, out, held, release, then=""):
+    """A command beside the runs holding `lock` until `release` exists, running `then` before it lets go."""
+    return start_bg(["flock", str(lock), "sh", "-c",
+                     f"touch {held}; while [ ! -e {release} ]; do sleep 0.02; done; {then}"], env, out)
+
+
+@case
+def wt_stop_waits_for_a_test_run_on_the_env_then_tears_down():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        events, release, env_dir = root / "events", root / "release", root / ".worktrees/_env/x"
+        cmd, env = wt_test_project(
+            root, f'echo "start $$" >> {events}\nwhile [ ! -e {release} ]; do sleep 0.02; done\necho "end $$" >> {events}\n',
+            psql_body=f'echo "psql $*" >> {events}\n', systemctl_body=f'echo "systemctl $*" >> {events}\n')
+        outs = [root / "test.out", root / "stop.out"]
+        procs = [start_bg([*cmd, *EXEC_RUN], env, outs[0])]
+        try:
+            wait_for(lambda: events.exists() and "start" in events.read_text(), "the test run's Odoo")
+            procs.append(start_bg(["bash", str(root / "scripts/wt-stop.sh"), "x"], env, outs[1]))
+            wait_for(lambda: "waiting" in outs[1].read_text(), "wt-stop's waiting line")
+            text = events.read_text()
+            assert "DROP DATABASE" not in text and "systemctl" not in text and env_dir.is_dir(), text
+        finally:
+            release.touch()
+            finish_bg(procs)
+        out, log = outs[1].read_text(), events.read_text().splitlines()
+        assert procs[1].returncode == 0 and "STATUS: removed" in out and not env_dir.exists(), out
+        assert f"(pid {procs[0].pid}: " in out and "then stopping the env" in out, out
+        end = next(i for i, line in enumerate(log) if line.startswith("end "))
+        assert all(i > end for i, line in enumerate(log)
+                   if "pg_database" in line or "DROP DATABASE" in line or "systemctl" in line), log
+        assert any(line.startswith("systemctl --user stop odoo-wt@x.service") for line in log), log
+
+
+@case
+def a_worktree_dirtied_while_wt_stop_waits_is_kept():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        events, held, release, worktree = root / "events", root / "held", root / "release", root / ".worktrees/x"
+        cmd, env = wt_test_project(root, "", psql_body=f'echo "psql $*" >> {events}\n')
+        worktree.mkdir()
+        git(worktree, "init", "-qb", "main")
+        commit(worktree, "2026-10-01", {"acme_a/__manifest__.py": "{}\n"})
+        procs = [hold_lock(root / ".worktrees/_env/x/test.lock", env, root / "holder.out", held, release)]
+        try:
+            wait_for(held.exists, "the test run")
+            procs.append(start_bg(["bash", str(root / "scripts/wt-stop.sh"), "x"], env, root / "out"))
+            wait_for(lambda: "waiting" in (root / "out").read_text(), "wt-stop's waiting line")
+            (worktree / "acme_a/models.py").write_text("a\n")
+        finally:
+            release.touch()
+            finish_bg(procs)
+        out = (root / "out").read_text()
+        assert procs[1].returncode == 0 and "DIRTY-kept" in out, out
+        assert not events.exists() and (root / ".worktrees/_env/x/odoo.conf").exists(), out
+
+
+@case
+def a_run_still_waiting_when_the_env_is_stopped_exits_without_odoo():
+    # the env removed (as wt-stop leaves it), removed and re-created (a wt-start of the slug
+    # since), and its conf deleted by hand
+    for then in ("rm -rf {env}", "rm -rf {env}; mkdir {env}; echo '[options]' > {env}/odoo.conf; : > {env}/test.lock",
+                 "rm {env}/odoo.conf"):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            env_dir, held, release = root / ".worktrees/_env/x", root / "held", root / "release"
+            cmd, env = wt_test_project(root, "")
+            procs = [hold_lock(env_dir / "test.lock", env, root / "holder.out", held, release,
+                               then.format(env=shlex.quote(str(env_dir))))]
+            try:
+                wait_for(held.exists, "the holder")
+                procs.append(start_bg([*cmd, *TEE_RUN], env, root / "out"))
+                wait_for(lambda: "waiting" in (root / "out").read_text(), "the run's waiting line")
+            finally:
+                release.touch()
+                finish_bg(procs)
+            out = (root / "out").read_text()
+            assert procs[1].returncode == 1 and "env x was stopped while this run waited" in out, (then, out)
+            assert read_argv(root / "odoo.argv") is None and read_argv(root / "psql.argv") is None, (then, out)
+
+
+@case
+def a_run_that_cannot_take_the_env_lock_says_so_without_odoo():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        cmd, env = wt_test_project(root, "")
+        (root / ".worktrees/_env/x/test.lock").mkdir()
+        proc = subprocess.run([*cmd, *TEE_RUN], capture_output=True, text=True, env=env, timeout=20)
+        out = proc.stdout + proc.stderr
+        assert proc.returncode == 1 and "cannot take" in out and "was stopped" not in out, out
+        assert read_argv(root / "odoo.argv") is None and read_argv(root / "psql.argv") is None, out
+
+
+def stop_project(root):
+    """wt_test_project with psql and systemctl logging to root/events; returns wt-stop's command,
+    its environment and the events file."""
+    events = root / "events"
+    _cmd, env = wt_test_project(root, "", psql_body=f'echo "psql $*" >> {events}\n',
+                                systemctl_body=f'echo "systemctl $*" >> {events}\n')
+    return ["bash", str(root / "scripts/wt-stop.sh"), "x"], env, events
+
+
+@case
+def wt_stop_waits_again_for_a_run_on_an_env_recreated_while_it_waited():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        env_dir, out = root / ".worktrees/_env/x", root / "stop.out"
+        held, release, recreated = root / "held", root / "release", root / "recreated"
+        held_new, release_new = root / "held_new", root / "release_new"
+        cmd, env, events = stop_project(root)
+        quoted = shlex.quote(str(env_dir))
+        # the old env's run lets go only once a run on the re-created env holds the new lock
+        procs = [hold_lock(env_dir / "test.lock", env, root / "old.out", held, release,
+                           f"rm -rf {quoted}; mkdir {quoted}; touch {recreated}; "
+                           f"while [ ! -e {held_new} ]; do sleep 0.02; done")]
+        try:
+            wait_for(held.exists, "the old env's run")
+            procs.append(start_bg(cmd, env, out))
+            wait_for(lambda: "waiting" in out.read_text(), "wt-stop's waiting line")
+            release.touch()
+            wait_for(recreated.exists, "the re-created env")
+            procs.append(hold_lock(env_dir / "test.lock", env, root / "new.out", held_new, release_new))
+            wait_for(lambda: out.read_text().count("waiting for it to end") == 2, "wt-stop's wait on the new env")
+            assert env_dir.is_dir() and not events.exists(), (out.read_text(), env_dir.is_dir())
+        finally:
+            release.touch()
+            held_new.touch()
+            release_new.touch()
+            finish_bg(procs)
+        text = out.read_text()
+        assert procs[1].returncode == 0 and "STATUS: removed" in text and not env_dir.exists(), text
+        assert f"(pid {procs[2].pid}: flock " in text and "was removed while" not in text, text
+
+
+@case
+def wt_stop_whose_env_is_removed_while_it_waits_says_so_and_finishes():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        env_dir, out, held, release = root / ".worktrees/_env/x", root / "stop.out", root / "held", root / "release"
+        cmd, env, events = stop_project(root)
+        procs = [hold_lock(env_dir / "test.lock", env, root / "holder.out", held, release,
+                           f"rm -rf {shlex.quote(str(env_dir))}")]
+        try:
+            wait_for(held.exists, "the test run")
+            procs.append(start_bg(cmd, env, out))
+            wait_for(lambda: "waiting" in out.read_text(), "wt-stop's waiting line")
+        finally:
+            release.touch()
+            finish_bg(procs)
+        text = out.read_text()
+        assert procs[1].returncode == 0 and "env x was removed while this waited" in text, text
+        assert "STATUS: removed (x)" in text and not env_dir.exists() and "systemctl --user stop" in events.read_text()
+
+
+@case
+def wt_stop_that_cannot_lock_the_env_leaves_it_and_its_service():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        cmd, env, events = stop_project(root)
+        (root / ".worktrees/_env/x/test.lock").mkdir()
+        run = start_bg(cmd, env, root / "out")
+        finish_bg([run], timeout=20)
+        out = (root / "out").read_text()
+        assert run.returncode == 1 and "cannot take" in out and "STATUS: removed" not in out, out
+        assert (root / ".worktrees/_env/x/odoo.conf").exists() and not events.exists(), out
+
+
+@case
+def wt_stop_whose_lock_wait_fails_with_the_env_gone_removes_the_rest():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        cmd, env, events = stop_project(root)
+        env_dir, flock = root / ".worktrees/_env/x", root / "bin/flock"
+        # the lock looks held, and its wait fails once something else removed the env
+        flock.write_text(f'#!/usr/bin/env bash\ncase "$*" in\n  "-n 9") exit 1 ;;\n'
+                         f'  9) rm -rf {shlex.quote(str(env_dir))}; exit 1 ;;\nesac\n'
+                         f'exec {shlex.quote(shutil.which("flock"))} "$@"\n')
+        flock.chmod(0o755)
+        run = start_bg(cmd, env, root / "out")
+        finish_bg([run], timeout=20)
+        out = (root / "out").read_text()
+        assert run.returncode == 0 and "STATUS: removed (x)" in out and "cannot take" not in out, out
+        assert not env_dir.exists() and "systemctl --user stop odoo-wt@x.service" in events.read_text(), out
+
+
+@case
+def a_symlinked_test_lock_is_taken_by_a_run():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        cmd, env = wt_test_project(root, "")
+        (root / ".worktrees/_env/x/test.lock").symlink_to(root / "elsewhere.lock")
+        run = start_bg([*cmd, *EXEC_RUN], env, root / "out")
+        finish_bg([run], timeout=20)
+        out = (root / "out").read_text()
+        assert run.returncode == 0 and read_argv(root / "odoo.argv") is not None and "stopped" not in out, out
+
+
+@case
+def a_symlinked_test_lock_is_taken_by_wt_stop():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        cmd, env, _events = stop_project(root)
+        env_dir, target = root / ".worktrees/_env/x", root / "elsewhere.lock"
+        (env_dir / "test.lock").symlink_to(target)
+        run = start_bg(cmd, env, root / "out")
+        finish_bg([run], timeout=20)
+        out = (root / "out").read_text()
+        assert run.returncode == 0 and "STATUS: removed (x)" in out and not env_dir.exists(), out
+        assert target.is_file(), "the link removed, not what it points to"
+
+
+@case
+def wt_stop_without_an_env_dir_removes_the_rest_without_a_lock():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        cmd, env, events = stop_project(root)
+        shutil.rmtree(root / ".worktrees/_env/x")
+        run = start_bg(cmd, env, root / "out")
+        finish_bg([run], timeout=20)
+        lines = (root / "out").read_text().splitlines()
+        assert run.returncode == 0 and len(lines) == 1 and lines[0].startswith("STATUS: removed (x)"), lines
+        assert not (root / ".worktrees/_env/x").exists() and "DROP DATABASE IF EXISTS wt_x_restoring" in events.read_text()
+
+
+@case
+def a_caller_holding_the_env_lock_does_not_deadlock_wt_stop_or_the_restore():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        cmd, env = wt_test_project(root, "")
+        lock = root / ".worktrees/_env/x/test.lock"
+        run = start_bg(["flock", str(lock), "bash", str(root / "scripts/wt-stop.sh"), "x"], env, root / "out")
+        finish_bg([run], timeout=20)
+        out = (root / "out").read_text()
+        assert run.returncode == 0 and "running under its lock" in out and "STATUS: removed" in out, out
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        cmd, env, _calls = wt_restore_project(root, exists="1", neutralized=False)
+        run = start_bg(["flock", str(root / ".worktrees/_env/x/test.lock"), *cmd], env, root / "out")
+        finish_bg([run], timeout=20)
+        out = (root / "out").read_text()
+        assert run.returncode == 0 and "running under its lock" in out and "db-ready" in out, out
 
 
 @case
@@ -563,6 +815,91 @@ def the_override_lets_a_claude_worktree_through():
     assert (rc, out.strip()) == (7, "BOOTSTRAP"), (rc, out)
 
 
+def run_wt_start(root, interface=None):
+    """Run the rendered wt-start.sh for slug `x` in project `root` (made on the first call) with
+    WT_HTTP_INTERFACE=`interface` in .env when given; its helper scripts are no-ops, the worktree
+    and port exist, git, psql and systemctl are stubs. Returns (exit code, stdout+stderr, conf path)."""
+    scripts, bin_dir, env_dir = root / "scripts", root / "bin", root / ".worktrees/_env/x"
+    if not scripts.exists():
+        for d in (scripts, bin_dir, env_dir, root / "backup"):
+            d.mkdir(parents=True)
+        (root / "backup/odoo.dump").write_bytes(b"")
+        (env_dir / "port").write_text("1700\n")
+        for src in (SRC, COMMON_SRC):
+            (scripts / src.name.removesuffix(".jinja")).write_text(render_script(src))
+        for name in ("wt-bootstrap.sh", "wt-link.sh", "wt-restore.sh"):
+            (scripts / name).write_text("exit 0\n")
+        stubs = {"git": f'case "$*" in *"worktree list"*) echo "worktree {root}/.worktrees/x" ;; esac\n',
+                 "psql": "", "systemctl": ""}
+        for name, body in stubs.items():
+            (bin_dir / name).write_text(f"#!/usr/bin/env bash\n{body}")
+            (bin_dir / name).chmod(0o755)
+    (root / ".env").write_text(f"WT_HTTP_INTERFACE={interface}\n" if interface else "")
+    proc = subprocess.run(["bash", str(scripts / "wt-start.sh"), "x"], cwd=root, capture_output=True, text=True,
+                          stdin=subprocess.DEVNULL,
+                          env={**os.environ, "HOME": str(root), "WT_TEST_PROJECT_DIR": str(root),
+                               "PATH": f"{bin_dir}:{os.environ['PATH']}"})
+    return proc.returncode, proc.stdout + proc.stderr, env_dir / "odoo.conf"
+
+
+@case
+def a_loopback_session_keeps_the_dev_conf():
+    for interface in (None, "::1", "127.0.0.1", "localhost", "127.8.9.10"):
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, conf_path = run_wt_start(pathlib.Path(tmp), interface)
+            assert rc == 0, (interface, out)
+            options = parse_conf(conf_path.read_text())["options"]
+            assert options["admin_passwd"] == "odoo" and options.keys() == conf(render()).keys(), (interface, options)
+            assert options["http_interface"] == (interface or "::1"), options
+
+
+@case
+def a_session_beyond_loopback_gets_a_random_master_password_and_no_database_manager():
+    for interface in ("0.0.0.0", "::", "10.0.0.7"):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            passwords = []
+            for _run in range(2):
+                rc, out, conf_path = run_wt_start(root, interface)
+                assert rc == 0, (interface, out)
+                found = parse_conf(conf_path.read_text())
+                assert found["options"].get("list_db") == "False", (interface, found)
+                assert "list_db" not in found.get("queue_job", {}), found
+                passwords.append(found["options"]["admin_passwd"])
+            assert all(re.fullmatch(r"[A-Za-z0-9]{24,}", password) for password in passwords), passwords
+            assert passwords[0] != passwords[1], passwords
+
+
+@case
+def the_session_conf_is_private_even_when_it_existed():
+    # it carries db_password, and beyond loopback the master password
+    for interface in (None, "0.0.0.0"):
+        with tempfile.TemporaryDirectory() as tmp:
+            modes = []
+            for _run in range(2):
+                rc, out, conf_path = run_wt_start(pathlib.Path(tmp), interface)
+                assert rc == 0, (interface, out)
+                modes.append(conf_path.stat().st_mode & 0o777)
+                conf_path.chmod(0o644)  # as a wt-start of before left it
+            assert modes == [0o600, 0o600], (interface, [oct(mode) for mode in modes])
+
+
+@case
+def a_failed_conf_write_keeps_the_previous_conf():
+    # written in place, a failure before the list_db line left a conf with the database manager on
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        rc, out, conf_path = run_wt_start(root, "0.0.0.0")
+        assert rc == 0, out
+        before = conf_path.read_text()
+        sed = root / "bin/sed"
+        sed.write_text(f'#!/usr/bin/env bash\n[ "$1" = -i ] && exit 1\nexec {shlex.quote(shutil.which("sed"))} "$@"\n')
+        sed.chmod(0o755)
+        rc, out, conf_path = run_wt_start(root, "0.0.0.0")
+        assert rc != 0 and conf_path.read_text() == before, (rc, out)
+        assert sorted(path.name for path in conf_path.parent.iterdir()) == ["data", "odoo.conf", "port"], out
+
+
 RESTORE_SRC = SRC.with_name("wt-restore.sh.jinja")
 DUMP = "odoo_2026-10-13-18-30-06.dump"
 INSTALLED = ("base", *(f"acme_{name}" for name in "abcdefghi"))
@@ -622,51 +959,91 @@ def acme_history(repo, dirty=True, session=False, origin=True):
         (repo / "acme_d/__manifest__.py").write_text("{'version': 2}\n")
 
 
-def run_wt_restore(dump=DUMP, installed=INSTALLED, update_rc=0, exists="", tz="UTC", filestore=(),
-                   update_log_dir=False, **history):
-    """Run the rendered wt-restore.sh for slug `x` on an acme_history worktree.
+# Stands in for `odoo shell` reading a script on stdin: the script runs against an odoo whose
+# neutralize module logs the modules asked for, and an env whose cursor logs what it runs.
+SHELL_STUB = '''\
+import sys, types
+calls = open(sys.argv[1], "a")
+def get_neutralization_queries(modules):
+    modules = list(modules)
+    calls.write("neutralization-queries %s\\n" % ",".join(modules))
+    for module in modules:
+        yield "-- %s/data/neutralize.sql" % module
+class Cursor:
+    def execute(self, query):
+        calls.write("execute %s\\n" % query)
+    def commit(self):
+        calls.write("commit\\n")
+odoo, modules, neutralize = (types.ModuleType(name) for name in ("odoo", "odoo.modules", "odoo.modules.neutralize"))
+neutralize.get_neutralization_queries = get_neutralization_queries
+odoo.modules, modules.neutralize = modules, neutralize
+sys.modules.update({"odoo": odoo, "odoo.modules": modules, "odoo.modules.neutralize": neutralize})
+exec(sys.stdin.read(), {"__name__": "__main__", "odoo": odoo, "env": types.SimpleNamespace(cr=Cursor())})
+calls.close()
+sys.exit(int(sys.argv[2]))
+'''
+
+
+def wt_restore_project(root, dump=DUMP, installed=INSTALLED, installed_after=None, update_rc=0, shell_rc=0,
+                       exists="", neutralized=True, tz="UTC", filestore=(), update_log_dir=False, **history):
+    """Lay out a project at `root` with the rendered wt-restore.sh for slug `x` on an acme_history worktree.
 
     psql, pg_restore and the profile's odoo are stubs logging their argv, in call
     order, to one file; an odoo on PATH logs as PATH-odoo and fails. psql finds
-    wt_x when `exists` is "1" (neutralized) and answers the installed-module query
-    with `installed`; odoo on a `-u` files an attachment in the staging DB's
-    filestore and exits `update_rc`. `filestore` lists files there beforehand;
-    `update_log_dir` makes update.log a directory.
-    Returns the exit code, stdout+stderr, the calls and the filestore's files.
+    wt_x when `exists` is "1" (neutralized unless `neutralized` is false) and
+    answers the installed-module query with `installed`, after a `-u` with
+    `installed_after` when given; odoo on a `-u` files an attachment in the
+    staging DB's filestore and exits `update_rc`, and `odoo shell` runs its stdin
+    under SHELL_STUB and exits `shell_rc`. `filestore` lists files there
+    beforehand; `update_log_dir` makes update.log a directory.
+    Returns the command of a run, its environment and the calls file.
     """
+    scripts, bin_dir, odoo_bin, calls = root / "scripts", root / "bin", root / ".nix-profile/bin", root / "calls"
+    for d in (scripts, bin_dir, odoo_bin, root / "backup", root / ".worktrees/_env/x", root / ".worktrees/x"):
+        d.mkdir(parents=True)
+    (root / ".worktrees/_env/x/odoo.conf").write_text("[options]\n")
+    if update_log_dir:
+        (root / ".worktrees/_env/x/update.log").mkdir()
+    (root / "backup" / dump).write_bytes(b"")
+    for path in filestore:
+        (root / FILESTORE / path).parent.mkdir(parents=True, exist_ok=True)
+        (root / FILESTORE / path).write_text("old\n")
+    acme_history(root / ".worktrees/x", **history)
+    for src in (RESTORE_SRC, COMMON_SRC):
+        (scripts / src.name.removesuffix(".jinja")).write_text(render_script(src))
+    (root / "shell.py").write_text(SHELL_STUB)
+    attachment, updated = root / FILESTORE / "wt_x_restoring/ab/ab12", root / "updated"
+    after = shlex.join(installed if installed_after is None else installed_after)
+    stubs = {
+        bin_dir / "psql": f'case "$*" in\n  *pg_database*) printf "%s" {shlex.quote(exists)} ;;\n'
+                          f'  *is_neutralized*) echo {"true" if neutralized else ""} ;;\n'
+                          '  *"FROM res_users"*) echo 1 ;;\n'
+                          f'  *ir_module_module*) if [ -e {updated} ]; then printf "%s\\n" {after}; '
+                          f'else printf "%s\\n" {shlex.join(installed)}; fi ;;\nesac\n',
+        bin_dir / "pg_restore": "",
+        bin_dir / "odoo": "exit 1\n",
+        odoo_bin / "odoo": f'case " $* " in\n'
+                           f'  *" -u "*) mkdir -p {attachment.parent}; echo new > {attachment}; touch {updated}\n'
+                           f'    exit {update_rc} ;;\n'
+                           f'  *" shell "*) exec {shlex.quote(sys.executable)} {root / "shell.py"} {calls} {shell_rc} ;;\n'
+                           'esac\n',
+    }
+    for path, body in stubs.items():
+        name = "PATH-odoo" if path == bin_dir / "odoo" else path.name
+        path.write_text(f'#!/usr/bin/env bash\necho "{name} $*" >> "{calls}"\n{body}')
+        path.chmod(0o755)
+    env = {**os.environ, "HOME": str(root), "WT_TEST_PROJECT_DIR": str(root), "TZ": tz,
+           "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1", "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+    return ["bash", str(scripts / "wt-restore.sh"), "x"], env, calls
+
+
+def run_wt_restore(dump=DUMP, **options):
+    """Run wt_restore_project's wt-restore.sh; returns the exit code, stdout+stderr, the calls
+    and the filestore's files."""
     with tempfile.TemporaryDirectory() as tmp:
         root = pathlib.Path(tmp)
-        scripts, bin_dir, odoo_bin, calls = root / "scripts", root / "bin", root / ".nix-profile/bin", root / "calls"
-        for d in (scripts, bin_dir, odoo_bin, root / "backup", root / ".worktrees/_env/x", root / ".worktrees/x"):
-            d.mkdir(parents=True)
-        (root / ".worktrees/_env/x/odoo.conf").write_text("[options]\n")
-        if update_log_dir:
-            (root / ".worktrees/_env/x/update.log").mkdir()
-        (root / "backup" / dump).write_bytes(b"")
-        for path in filestore:
-            (root / FILESTORE / path).parent.mkdir(parents=True, exist_ok=True)
-            (root / FILESTORE / path).write_text("old\n")
-        acme_history(root / ".worktrees/x", **history)
-        for src in (RESTORE_SRC, SRC.with_name("wt-common.sh.jinja")):
-            (scripts / src.name.removesuffix(".jinja")).write_text(render_script(src))
-        attachment = root / FILESTORE / "wt_x_restoring/ab/ab12"
-        stubs = {
-            bin_dir / "psql": f'case "$*" in\n  *pg_database*) printf "%s" {shlex.quote(exists)} ;;\n'
-                              '  *is_neutralized*) echo true ;;\n  *"FROM res_users"*) echo 1 ;;\n'
-                              f'  *ir_module_module*) printf "%s\\n" {shlex.join(installed)} ;;\nesac\n',
-            bin_dir / "pg_restore": "",
-            bin_dir / "odoo": "exit 1\n",
-            odoo_bin / "odoo": f'case " $* " in *" -u "*) mkdir -p {attachment.parent}; echo new > {attachment}\n'
-                               f'  exit {update_rc} ;; esac\n',
-        }
-        for path, body in stubs.items():
-            name = "PATH-odoo" if path == bin_dir / "odoo" else path.name
-            path.write_text(f'#!/usr/bin/env bash\necho "{name} $*" >> "{calls}"\n{body}')
-            path.chmod(0o755)
-        proc = subprocess.run(["bash", str(scripts / "wt-restore.sh"), "x"], capture_output=True, text=True,
-                              env={**os.environ, "HOME": tmp, "WT_TEST_PROJECT_DIR": tmp, "TZ": tz,
-                                   "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1",
-                                   "PATH": f"{bin_dir}:{os.environ['PATH']}"})
+        cmd, env, calls = wt_restore_project(root, dump, **options)
+        proc = subprocess.run(cmd, capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL)
         files = sorted(str(p.relative_to(root / FILESTORE)) for p in (root / FILESTORE).rglob("*") if p.is_file())
         return (proc.returncode, proc.stdout + proc.stderr, calls.read_text().splitlines() if calls.exists() else [],
                 files)
@@ -789,6 +1166,121 @@ def a_step_failing_after_neutralize_drops_the_copy():
 def a_reused_db_is_not_updated():
     rc, out, calls, _files = run_wt_restore(exists="1")
     assert rc == 0 and "db-reused" in out and call_index(calls, "odoo") is None, (rc, calls, out)
+
+
+@case
+def a_module_the_update_installs_gets_its_neutralization_before_the_rename():
+    # `odoo neutralize` ran before the update, so a dependency the update installed missed it
+    rc, out, calls, _files = run_wt_restore(installed_after=(*INSTALLED, "acme_dep"))
+    shell = call_index(calls, "odoo", "shell")
+    assert rc == 0 and shell is not None, (rc, calls, out)
+    assert "-d wt_x_restoring" in calls[shell] and {"--no-http", "--stop-after-init"} <= set(calls[shell].split()), calls
+    asked = [line for line in calls if line.startswith("neutralization-queries ")]
+    assert asked == ["neutralization-queries acme_dep"], calls
+    order = [call_index(calls, "odoo", "-u"), shell, call_index(calls, "neutralization-queries"),
+             call_index(calls, "execute", "acme_dep/data/neutralize.sql"), call_index(calls, "commit"),
+             call_index(calls, "psql", "-f"), call_index(calls, "psql", "RENAME")]
+    assert None not in order and order == sorted(order), (order, calls)
+
+
+@case
+def nothing_new_installed_runs_no_neutralization_shell():
+    for options in ({}, {"dump": "odoo_2026-10-20-01-00-00.dump"}):
+        rc, out, calls, _files = run_wt_restore(**options)
+        assert rc == 0 and call_index(calls, "odoo", "shell") is None, (options, calls, out)
+
+
+@case
+def a_failed_neutralization_of_new_modules_drops_the_copy():
+    rc, out, calls, files = run_wt_restore(installed_after=(*INSTALLED, "acme_dep"), shell_rc=1)
+    shell = call_index(calls, "odoo", "shell")
+    assert rc == 1 and shell is not None and call_index(calls, "psql", "RENAME") is None, (rc, calls, out)
+    assert any("DROP DATABASE IF EXISTS wt_x_restoring" in line for line in calls[shell:]), calls
+    assert files == [] and "neutralizing acme_dep failed" in out, (files, out)
+
+
+@case
+def the_restore_waits_for_a_test_run_before_replacing_the_db():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        cmd, env, calls = wt_restore_project(root, exists="1", neutralized=False)
+        held, release = root / "held", root / "release"
+        procs = [hold_lock(root / ".worktrees/_env/x/test.lock", env, root / "holder.out", held, release)]
+        try:
+            wait_for(held.exists, "the test run")
+            procs.append(start_bg(cmd, env, root / "out"))
+            wait_for(lambda: "waiting" in (root / "out").read_text(), "the restore's waiting line")
+            text = calls.read_text()
+            assert "IF EXISTS wt_x " not in text and "RENAME" not in text and "dev-fixup" in text, text
+            assert (root / FILESTORE / "wt_x_restoring/ab/ab12").exists(), "the filestore moved before the wait"
+        finally:
+            release.touch()
+            finish_bg(procs)
+        out = (root / "out").read_text()
+        assert procs[1].returncode == 0 and "db-ready" in out, out
+        assert f"(pid {procs[0].pid}: flock " in out and "then replacing wt_x" in out, out
+        assert call_index(calls.read_text().splitlines(), "psql", "RENAME") is not None
+
+
+@case
+def a_restore_whose_env_is_stopped_during_its_wait_drops_the_copy_and_says_why():
+    # the env dir removed as wt-stop leaves it, and only its lock file (the staging filestore stays to be dropped)
+    for then in ("rm -rf {env}", "rm {env}/test.lock"):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            env_dir = root / ".worktrees/_env/x"
+            cmd, env, calls = wt_restore_project(root, exists="1", neutralized=False)
+            held, release = root / "held", root / "release"
+            procs = [hold_lock(env_dir / "test.lock", env, root / "holder.out", held, release,
+                               then.format(env=shlex.quote(str(env_dir))))]
+            try:
+                wait_for(held.exists, "the test run")
+                procs.append(start_bg(cmd, env, root / "out"))
+                wait_for(lambda: "waiting" in (root / "out").read_text(), "the restore's waiting line")
+            finally:
+                release.touch()
+                finish_bg(procs)
+            out, log = (root / "out").read_text(), calls.read_text().splitlines()
+            assert procs[1].returncode == 1 and "env x was stopped while the restore waited" in out, (then, out)
+            fixup = call_index(log, "psql", "-f")
+            assert fixup is not None and any("IF EXISTS wt_x_restoring" in line for line in log[fixup:]), (then, log)
+            assert not any("IF EXISTS wt_x " in line or "RENAME" in line for line in log), (then, log)
+            assert not (root / FILESTORE / "wt_x_restoring").exists(), then
+
+
+@case
+def a_restore_that_cannot_take_the_env_lock_drops_the_copy_and_says_why():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        cmd, env, calls = wt_restore_project(root, exists="1", neutralized=False)
+        (root / ".worktrees/_env/x/test.lock").mkdir()
+        run = start_bg(cmd, env, root / "out")
+        finish_bg([run], timeout=20)
+        out, log = (root / "out").read_text(), calls.read_text().splitlines()
+        assert run.returncode == 1 and "cannot take" in out and "to replace wt_x" in out, out
+        assert "was stopped" not in out, out
+        fixup = call_index(log, "psql", "-f")
+        assert fixup is not None and any("IF EXISTS wt_x_restoring" in line for line in log[fixup:]), log
+        assert not any("IF EXISTS wt_x " in line or "RENAME" in line for line in log), log
+        assert not (root / FILESTORE / "wt_x_restoring").exists(), out
+
+
+@case
+def a_reused_db_takes_no_test_lock():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        cmd, env, _calls = wt_restore_project(root, exists="1")
+        held, release = root / "held", root / "release"
+        procs = [hold_lock(root / ".worktrees/_env/x/test.lock", env, root / "holder.out", held, release)]
+        try:
+            wait_for(held.exists, "the test run")
+            run = start_bg(cmd, env, root / "out")
+            finish_bg([run], timeout=10)
+        finally:
+            release.touch()
+            finish_bg(procs)
+        out = (root / "out").read_text()
+        assert run.returncode == 0 and "db-reused" in out and "waiting" not in out, out
 
 
 if __name__ == "__main__":

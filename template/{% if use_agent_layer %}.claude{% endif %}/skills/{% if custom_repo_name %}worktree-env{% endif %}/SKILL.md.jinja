@@ -37,9 +37,12 @@ Invoke by absolute path under `${{ project_dir_var }}/.claude/skills/worktree-en
   session would get an env it cannot edit. Addons work runs in a session started in
   the base checkout (`use_worktree: false`); `WT_ALLOW_CLAUDE_WORKTREE=1` lets a
   read-only or test-only run through.
-- **`wt-stop.sh <slug>`** — stop the env's Odoo; if the worktree is clean, remove it,
+- **`wt-stop.sh <slug>`** — wait for a `wt-test.sh` run on the env (see the gotchas),
+  stop the env's Odoo; if the worktree is clean, remove it,
   drop `wt_<slug>`, delete the runtime dir (the branch stays on origin). A **dirty**
-  worktree is kept (worktree + env + DB) and reported so no work is lost.
+  worktree is kept (worktree + env + DB) and reported so no work is lost. Exit 1 when
+  it cannot take the env's test lock (`test.lock` not a writable file): env and
+  service left as they are.
 - **`wt-list.sh`** — table of all active envs (slug / port / DB / service / dirty).
 - `wt-bootstrap.sh` — one-time, light: installs the `odoo{{ service_suffix }}-wt@.service` template unit
   and checks the seed dump is present. **No DB work.**
@@ -110,11 +113,26 @@ the newest file is used. If `wt-start` reports no dump, ask the user to drop one
   the session branch's: a kept branch's own commits are not in the dump, whatever
   their date. A kept branch behind mainline gets the modules mainline changed since
   its fork point updated with its older code: rebase it before `wt-start`. A dependency a changed manifest gained is installed by that `-u`
-  itself; the attachments it writes move with the DB to its final name. The `STATUS:`
+  itself, and then gets its own `data/neutralize.sql` (Odoo's
+  `get_neutralization_queries` for exactly the modules the update installed, through
+  `odoo shell`), which `odoo neutralize` ran too early to see. Only those modules'
+  own queries run: a cron or mail server the new module's data creates stays active,
+  as base's deactivation of both ran before it existed (its crons never fire, sessions
+  run `max_cron_threads = 0`, but such a mail server could send). The attachments the update writes move with the DB to its final name. The `STATUS:`
   line names the modules; with nothing changed there is no update. Any failure drops
   the copy and fails the start, so `wt_<slug>` never exists half-updated: read
   `.worktrees/_env/<slug>/update.log`. A reused DB (re-run of `wt-start`) is not
   updated: `-u` it with `wt-test.sh`.
+- **What that update misses:** it sees only custom modules whose files changed since
+  the last mainline commit before the dump's day. So (a) an `addons.yaml` pin bump
+  since the dump (an OCA repo, or Odoo itself) is not updated, and (b) a module merged
+  before the dump's day but deployed to prod after it is still old in the dump and not
+  in the list. Update those by hand on the session:
+  `systemctl --user stop odoo{{ service_suffix }}-wt@<slug>.service`, then
+  `wt-test.sh <slug> -u <module>[,<module>...]` (for an Odoo pin bump, `-u all`), then
+  `systemctl --user start odoo{{ service_suffix }}-wt@<slug>.service`. A dependency such a
+  hand `-u` installs gets no neutralization of its own (only `wt-start`'s update does
+  that): check its crons and mail servers.
 - **Concurrency:** port allocation + `git worktree add` run under `flock`
   (`.worktrees/.wt.lock`); the slow `pg_restore` runs outside the lock so parallel
   starts overlap. DBs/ports/worktrees are per-slug, so sessions never collide.
@@ -167,7 +185,12 @@ the newest file is used. If `wt-start` reports no dump, ask the user to drop one
   box (`*.<box>.<domain>` at any depth, as `*.localhost` is locally); the extra-label
   trick then reads `wt_<slug>.<user>.<box>.<domain>`. `WT_HTTP_INTERFACE=0.0.0.0`
   serves the neutralized prod copy (`admin`/`admin`) to that LAN — an explicit
-  opt-in, for a server whose main Odoo already is a LAN test copy. A role that is not
+  opt-in, for a server whose main Odoo already is a LAN test copy. An interface other
+  than loopback (`::1`, `localhost`, `127.0.0.0/8`) also gets `list_db = False` and a
+  random `admin_passwd`, new on every `wt-start`: the database manager
+  (`/web/database`: back up, restore, drop any DB on that postgres) is off for the LAN.
+  A loopback session keeps `admin_passwd = odoo` with the manager on. The conf is mode
+  0600 either way (it carries `db_password`). A role that is not
   a superuser works: session DBs are dropped through `drop_db`, which falls back
   from `WITH (FORCE)` when an autovacuum worker is on the DB.
 - **Run tests through `wt-test.sh`, never `odoo -c <CONF>` by hand.** A bare run
@@ -177,12 +200,19 @@ the newest file is used. If `wt-start` reports no dump, ask the user to drop one
   `::1` only, while HttpCase talks to `127.0.0.1`; and `^%d$` maps the Host
   `127.0.0.1` to no database. `wt-test.sh` takes a free port, listens on
   `127.0.0.1` (still loopback only) and passes `--db-filter ^<DB>$`.
-- **Test runs on one env wait for each other.** Two runs on one DB collide: the second
+- **Test runs on one env wait for each other, and stop and restore wait for them.** Two runs on one DB collide: the second
   died at registry load on a lock timeout (`CREATE UNIQUE INDEX ...`) while the first's
   `-u` held the tables. `wt-test.sh` holds an exclusive `flock` on
   `.worktrees/_env/<slug>/test.lock` for the whole Odoo run, so a second run prints
   that it is waiting and on whom (pid and command), blocks until the first ends, then
-  runs. A run that seems stuck before Odoo starts is waiting there. A command of your
+  runs. A run that seems stuck before Odoo starts is waiting there. `wt-stop.sh` takes
+  the same lock (its waiting line ends `then stopping the env`) before it stops the
+  session's service, decides whether the worktree is dirty and tears anything down; an
+  env removed and re-created while it waited has its new lock waited for in turn. On
+  every restore that does not reuse the DB, `wt-restore.sh` holds the lock while it swaps
+  the fresh copy in as `wt_<slug>` (filestore move, drop of the old DB, rename): neither
+  drops a DB under a running test. A run still waiting when `wt-stop.sh` removed the env exits 1
+  (`env <slug> was stopped while this run waited`) rather than run against nothing. A command of your
   own other than `wt-test.sh` takes its turn with
   `flock "${{ project_dir_var }}/.worktrees/_env/<slug>/test.lock" <command>`; `wt-test.sh` needs no
   wrapper (wrapped anyway, it finds its caller holding the lock and runs under it).
