@@ -4,7 +4,7 @@
 #   - the session conf and DB;
 #   - a free port, so a browser tab left on <URL> cannot reach the tests;
 #   - the IPv4 loopback: HttpCase talks to 127.0.0.1 (odoo.tests HOST), while the
-#     session conf listens on ::1 only;
+#     session conf listens on ::1 (WT_HTTP_INTERFACE, wt-common.sh);
 #   - a dbfilter naming the session DB: the conf's ^%d$ maps the Host 127.0.0.1
 #     to no database at all.
 # Still loopback only, so the prod copy never reaches the LAN. Stop the session's

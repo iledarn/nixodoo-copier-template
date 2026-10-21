@@ -16,6 +16,9 @@
 # and serve the session on the LAN as http://wt_<slug>.<WT_HOST_SUFFIX>:<port>.
 
 PROJ="${{ "{" }}{{ project_dir_var }}:-$HOME/{{ project_name }}}"
+# Exported: the odoo wrapper finds the project through it, else through the cwd. A dev
+# shell sets it; a plain SSH login on a shared test server does not (wt-test.sh from /tmp).
+export {{ project_dir_var }}="$PROJ"
 SRC_REPO="$PROJ/src/{{ custom_repo_name }}"               # nested addons repo (the user's main checkout)
 MAIN_FARM="$PROJ/.local/share/Odoo/addons/{{ odoo_version }}"   # main symlink farm — source of truth for OCA/CE targets
 
@@ -30,7 +33,7 @@ PORT_MAX={{ (odoo_major | int + 11) * 100 + 99 }}
 # Per-host overrides, read from WT_* lines in $PROJ/.env (no quotes, nothing else
 # from that file is read). Unset = local development, the defaults below. A shared
 # test server sets e.g.
-#   WT_DB_HOST=192.168.20.121  WT_DB_PORT=5432  WT_DB_PASSWORD=...
+#   WT_DB_HOST=10.0.0.5  WT_DB_PORT=5432  WT_DB_PASSWORD=...
 #   WT_HTTP_INTERFACE=0.0.0.0  WT_HOST_SUFFIX=odoo1.example.lan
 # so sessions use that postgres and are browsed from the LAN. WT_HOST_SUFFIX must
 # resolve at any depth (a wildcard record) to this host, as *.localhost does locally.

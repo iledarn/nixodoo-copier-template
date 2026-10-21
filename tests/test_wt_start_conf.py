@@ -137,7 +137,7 @@ def without_overrides_a_session_is_local():
         v = common_vars(env_lines, db_password="s3cret", postgres_port=16432)
         assert (v["WT_DB_HOST"], v["WT_DB_PORT"], v["WT_DB_PASSWORD"], v["WT_HTTP_INTERFACE"], v["WT_HOST_SUFFIX"]) == \
             ("localhost", "16432", "s3cret", "::1", "localhost"), (env_lines, v)
-        assert v["PSQL"] == "psql -h localhost -p 16432 -U odoo" and v["PGPASSWORD"] == "s3cret", v
+        assert v["PSQL"] == "psql -X -h localhost -p 16432 -U odoo" and v["PGPASSWORD"] == "s3cret", v
         assert v["session_host"] == "wt_x.localhost", v
 
 
@@ -147,8 +147,24 @@ def a_shared_test_server_overrides_from_dotenv():
                      "WT_HTTP_INTERFACE=0.0.0.0", "WT_HOST_SUFFIX=box1.lan", "WT_EVIL=1", "#WT_DB_HOST=no"])
     assert (v["WT_DB_HOST"], v["WT_DB_PORT"], v["WT_DB_PASSWORD"], v["WT_HTTP_INTERFACE"], v["WT_HOST_SUFFIX"]) == \
         ("10.0.0.5", "5432", "p=w d", "0.0.0.0", "box1.lan"), v
-    assert v["PSQL"] == "psql -h 10.0.0.5 -p 5432 -U odoo" and v["PGPASSWORD"] == "p=w d", v
+    assert v["PSQL"] == "psql -X -h 10.0.0.5 -p 5432 -U odoo" and v["PGPASSWORD"] == "p=w d", v
     assert v["session_host"] == "wt_x.box1.lan", v
+
+
+@case
+def a_plain_login_gets_the_project_dir_exported():
+    # wt-test.sh runs the odoo wrapper, which takes the cwd for the project when the
+    # variable is unset: an SSH login on a test server has no dev shell to set it
+    text = jinja2.Environment(trim_blocks=True, lstrip_blocks=True, keep_trailing_newline=True).from_string(
+        COMMON_SRC.read_text()).render(**{**BASE, "project_dir_var": "PROJ_DIR", "project_name": "proj",
+                                          "custom_repo_name": "addons"})
+    with tempfile.TemporaryDirectory() as d:
+        common = pathlib.Path(d, "wt-common.sh")
+        common.write_text(text)
+        out = subprocess.run(
+            ["bash", "-c", 'set -euo pipefail; source "$1"; bash -c \'printf %s "$PROJ_DIR"\'', "_", str(common)],
+            env={"PATH": os.environ["PATH"], "HOME": d}, capture_output=True, text=True, check=True).stdout
+    assert out == f"{d}/proj", out
 
 
 @case
