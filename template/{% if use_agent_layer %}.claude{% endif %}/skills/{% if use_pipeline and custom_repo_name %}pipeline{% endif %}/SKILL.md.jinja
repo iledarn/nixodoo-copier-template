@@ -130,6 +130,9 @@ standalone Backlog tasks in Phase 7.
   link it on the current task's `depend_on_ids`. Post a `Progress` note naming
   the blocker, then take the **BLOCKED** close in Phase 7 — the current task
   can't finish until the blocker does.
+- **Owner is not the user → handover note.** A slice, blocker or thread ticket
+  created for someone else, or handed to them, gets the `odoo-tickets` handover
+  note (draft shown to the user first, `mail.notification` read back).
 
 {% else %}
 ## Change Tracking
@@ -927,7 +930,7 @@ kb add "<description — file:line>" --scope {{ project_name }} --link RELATED:<
 ```
 
 A thread becomes a ticket only when the user asks for one{% if tickets_mcp == 'odoo' %} (`odoo-tickets` creates it, then
-`kb promote <id> <KEY>`){% endif %}. Collect the new ids for the session record.
+`kb promote <id> <KEY>`; a ticket for someone else gets the `odoo-tickets` handover note){% endif %}. Collect the new ids for the session record.
 {% else %}
 #### Step 1: Close the WIP entry{% if tickets_mcp == 'odoo' %} (state + the mirrored ticket together){% endif %}
 
