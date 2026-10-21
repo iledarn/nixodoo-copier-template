@@ -1,6 +1,6 @@
 ---
 name: odoo-tickets
-description: "How to create, read, update and close prod Odoo tasks over the Odoo connector (claude.ai, your own account): field conventions, internal notes, checklist, test cases, attachments (incl. every prod shell / bulk-data script you run), stage moves, start-work flow. Use when creating a ticket, taking a ticket into work ('let's start {{ ticket_prefix }}-xxx'), posting progress notes, marking test cases, attaching a script you ran against prod, or closing tickets. Single source of truth for prod task plumbing — pipeline and the memory mirror reference it."
+description: "How to create, read, update and close prod Odoo tasks over the Odoo connector (claude.ai, your own account): field conventions, internal notes, checklist, test cases, attachments (incl. every prod shell / bulk-data script you run), stage moves, start-work flow, handover note. Use when creating a ticket, handing a ticket to someone else, taking a ticket into work ('let's start {{ ticket_prefix }}-xxx'), posting progress notes, marking test cases, attaching a script you ran against prod, or closing tickets. Single source of truth for prod task plumbing — pipeline and the memory mirror reference it."
 argument-hint: "[{{ ticket_prefix }}-key or task id] [action]"
 ---
 
@@ -58,7 +58,7 @@ fields `["id", "name", "stage_id", "user_ids"]`. From a URL, take `id=<n>`.
 | `name` | Imperative summary of the work. No {{ ticket_prefix }} prefix — `project_key` adds it. |
 | `project_id` | Default project from `user_identity`. |
 | `stage_id` | Backlog (41) for queued work; Development (43) only if work starts immediately. Resolve by name if the board changed. |
-| `user_ids` | `[[6, 0, [<uid>]]]` — **always the human owner** (from `user_identity`), never empty on purpose. |
+| `user_ids` | `[[6, 0, [<uid>]]]` — **always the human owner**: you (uid from `user_identity`), or the teammate the user hands the task to. Never empty on purpose. An owner who is not you gets a [handover note](#handover-note-assignee-is-not-you). |
 | `task_type` | Honest pick: `bug` (broken behavior) / `feature` (net-new) / `improvement` (enhance existing) / `investigation` / `technical_debt` / `support` / `milestone`. |
 | `tag_ids` | **Always set.** `[[6, 0, [ids]]]` on create. ≥1 **area** tag + a **feature/topic** tag for any multi-ticket effort so siblings group. Reuse existing tags — never a near-duplicate. See [Tags](#tags-projecttags). |
 | `tshirt_estimate` | `xs`=1h, `s`=4h, `m`=8h (1d), `l`=24h (3d), `xl`=40h (1w), `xxl`=80h. **Also set `planned_hours` to the same number** — RPC fires no onchange. |
@@ -159,6 +159,36 @@ message_post(model="project.task", res_id=<task_id>,
 Bold **Category** prefix: `Requirement Change` / `Design Decision` /
 `Bug Fix` / `Review Fix` / `User Feedback` / `Progress` / `Deploy` (the exact
 commands a deploy ran — see the `deploy` skill).
+
+## Handover note (assignee is not you)
+
+A task created for someone else, or reassigned to someone else, makes them a
+follower and sends them nothing: `mail_auto_subscribe_no_notify` in `<quiet>`
+suppresses Odoo's "assigned to you" mail, and the chatter stays empty. Right
+after that `create` or `user_ids` write, post one note per task that names them:
+
+1. Partner: `read` `res.users` `[<assignee uid>]` `["partner_id"]`. Several new
+   assignees → one note, all their partners.
+2. Draft the body in English, as the user, opening with the assignee's first
+   name: the task is theirs now, where it came from, why them, whether you
+   still track it. No em dashes, no contractions, no AI phrasing. Show the
+   draft to the user; post on their go.
+3. Post through `execute` (the connector's `message_post` mentions nobody).
+   It returns the message id. The note mails the partners in `partner_ids`;
+   other followers get it only if they follow notes.
+
+   ```
+   execute(model="project.task", method="message_post", args=[[<task_id>]],
+           kwargs={"body": "<p>…</p>", "message_type": "comment",
+                   "subtype_xmlid": "mail.mt_note", "partner_ids": [<partner_id>],
+                   "context": {"mail_create_nosubscribe": true}})
+   ```
+
+4. Read back: `search_read` `mail.notification`
+   `[["mail_message_id", "=", <message id>]]` fields `["res_partner_id",
+   "notification_type", "notification_status", "failure_type"]`. Expect one
+   `email` row per partner, status `sent` (`ready` = still queued, read again).
+   `exception` / `bounce` → tell the user.
 
 ## Checklist (`project.task.subtask`)
 
