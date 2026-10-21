@@ -29,9 +29,14 @@ integrations stay silently disabled{% if tickets_mcp == 'odoo' %} (the standup c
 {% endif %}
 
 {% if tickets_mcp == 'odoo' %}
+{% if task_pr_uri %}
 Optionally add the project's stage map here once known (names + ids, which
 ones are fold/closed, any stage-move constraints — e.g. a `pr_uri` required
 before the done stage).
+{% else %}
+Optionally add the project's stage map here once known (names + ids, which
+ones are fold/closed, any stage-move constraints).
+{% endif %}
 {% endif %}
 
 Related: [[user_role]], [[conventions_behavior_protocol]] (State ↔ Odoo

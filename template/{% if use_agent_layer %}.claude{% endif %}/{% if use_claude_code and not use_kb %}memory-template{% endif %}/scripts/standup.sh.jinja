@@ -183,7 +183,7 @@ mid = me[0]["id"]
 cur = kw("project.task", "search_read",
          [[["project_id", "=", proj], ["stage_id.name", "=", stage], ["user_ids", "in", [mid]]]],
          {"fields": ["name"], "order": "write_date desc", "limit": 1})
-dom = [["user_ids", "in", [mid]], ["is_closed", "=", False]]
+dom = [["user_ids", "in", [mid]], {% if odoo_version == '16.0' %}["is_closed", "=", False]{% else %}["state", "not in", ["1_done", "1_canceled"]]{% endif %}]
 if cur:
     dom.append(["id", "!=", cur[0]["id"]])
 nxt = kw("project.task", "search_read", [dom],
