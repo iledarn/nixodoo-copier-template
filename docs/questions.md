@@ -22,6 +22,7 @@ Defaults in the table; anything you leave empty turns its feature off. See [the 
 | `status_mcp` | `none` (or `teams` → my-status + teams-message skills + bootstrap questions; Teams write goes through the claude.ai Microsoft 365 connector in Claude Code and `.agents/plugins/teams-mcp/` in Antigravity) |
 | `tickets_mcp` | `none` (or `odoo` → odoo-tickets skill, ticket links, `ODOO_*_PROD` in `.env`) |
 | `odoo_prod_url` | asked when `tickets_mcp=odoo` |
+| `task_keys` (prod Odoo runs OCA project_key: every task has a `key` like PROJ-123; `task_key_route` is asked only then) | `false` → a task's reference is `<ticket_prefix>-<id>`, looked up by its record id |
 | `use_pipeline` | `true` (asked when a custom addons repo is set) |
 | `extra_ticket_prefixes` (more ticket prefixes the pipeline takes as task keys, e.g. a second project's) | empty → `ticket_prefix` alone |
 | `use_kb` | `false` — SessionStart hook: `kb index` + `kb today` into every session (needs `kb` from okolovmark/kb; silent when absent) |

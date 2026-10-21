@@ -299,6 +299,10 @@ Do NOT write to {% if use_kb %}kb{% else %}memory files{% endif %} directly. The
 {% if tickets_mcp == 'odoo' %}
 With a ticket key in the request, the run's task is the ticket's own record: `kb sync odoo`
 upserts the user's open tickets, each with its key as `external_id`.
+{% if not task_keys %}
+This Odoo has no project_key, so the sync stores the record id there: `<TASK-KEY>`
+in the kb commands of this skill is the id without the `{{ ticket_prefix }}-` prefix.
+{% endif %}
 
 ```bash
 kb sync odoo
@@ -349,10 +353,15 @@ Before spawning any subagent:
 {% if tickets_mcp == 'odoo' %}
 0. **Resolve & read the task** (URL or {{ ticket_prefix }} key) — over the Odoo connector per
    `odoo-tickets` (never Chrome):
+{% if task_keys %}
    - Resolve: id from the URL (`#id=<n>`), or
      `search_read` `[["key", "=", "{{ ticket_prefix }}-xxxx"]]`
+{% else %}
+   - Resolve: id from the URL (`#id=<n>`), or from the reference
+     `{{ ticket_prefix }}-<id>` (no `key` field on this Odoo, see `odoo-tickets`)
+{% endif %}
 {% if use_kb %}
-   - `WIP_ID` must be this ticket's kb record (`external_id` = the key). One
+   - `WIP_ID` must be this ticket's kb record (`external_id` = {% if task_keys %}the key{% else %}the record id{% endif %}). One
      made by hand in Phase 0: when the Phase-0 `kb query` finds the ticket's
      record now, `kb merge <WIP_ID> <its id>` and take its id as `WIP_ID`;
      otherwise `kb promote <WIP_ID> <KEY>`. Never a second ticket or record.
@@ -363,7 +372,7 @@ Before spawning any subagent:
 {% endif %}
    - Read the form content with explicit field lists (heavy Html fields for
      this ONE task only):
-     - `read [id] ["name", "key", "stage_id", "user_ids", "task_type", "tshirt_estimate", "planned_hours", "effective_hours", "date_deadline", "child_ids", "depend_on_ids"]`
+     - `read [id] ["name", {% if task_keys %}"key", {% endif %}"stage_id", "user_ids", "task_type", "tshirt_estimate", "planned_hours", "effective_hours", "date_deadline", "child_ids", "depend_on_ids"]`
        — note any existing **Sub-tasks** (`child_ids`) and **Blocked By**
        (`depend_on_ids`); if `depend_on_ids` is non-empty the task may already
        be blocked, flag it to the user before starting.
@@ -930,7 +939,7 @@ kb add "<description — file:line>" --scope {{ project_name }} --link RELATED:<
 ```
 
 A thread becomes a ticket only when the user asks for one{% if tickets_mcp == 'odoo' %} (`odoo-tickets` creates it, then
-`kb promote <id> <KEY>`; a ticket for someone else gets the `odoo-tickets` handover note){% endif %}. Collect the new ids for the session record.
+`kb promote <id> {% if task_keys %}<KEY>{% else %}<record id>{% endif %}`; a ticket for someone else gets the `odoo-tickets` handover note){% endif %}. Collect the new ids for the session record.
 {% else %}
 #### Step 1: Close the WIP entry{% if tickets_mcp == 'odoo' %} (state + the mirrored ticket together){% endif %}
 

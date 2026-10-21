@@ -38,9 +38,15 @@ overrides the {{ identity }} (list mode only).
   step, no secrets anywhere in the project). Missing or asking to authenticate →
   tell the user to (re)connect it in their Claude settings.
 - **Task link template:** `{{ odoo_prod_url }}/web#id=<id>&model=project.task&view_type=form`
+{% if task_keys %}
 - **Ticket reference (display):** always show the {{ ticket_prefix }} key (`key` field, e.g.
   `{{ ticket_prefix }}-1064`) + title — **never the numeric database id**. The id is used only
   to build the link URL, never shown to the user or the team.
+{% else %}
+- **Ticket reference (display):** this Odoo has no project_key, so tasks have no
+  `key` field: never request it. Show `{{ ticket_prefix }}-<id>` (the record id behind
+  the prefix, e.g. `{{ ticket_prefix }}-1064`) + title; it is what "key" means below.
+{% endif %}
 - **Cost rule:** never include `description` in a `search_read` over tasks —
   prod descriptions can embed megabytes of base64 images. Explicit field
   lists only.
@@ -52,12 +58,12 @@ overrides the {{ identity }} (list mode only).
    fields `["id", "name"]`; empty → retry on `email`; still empty → stop, say so.
 3. Open tasks: `search_read` `project.task`,
    domain `[["user_ids", "in", [<uid>]], ["is_closed", "=", false]]`,
-   fields `["key", "name", "project_id", "stage_id", "date_deadline", "priority", "kanban_state"]`,
+   fields `[{% if task_keys %}"key", {% endif %}"name", "project_id", "stage_id", "date_deadline", "priority", "kanban_state"]`,
    order `"date_deadline asc, priority desc"`.
 4. Report: total count, grouped by project, one line per task:
    `<key> name — stage — deadline` (e.g. `{{ ticket_prefix }}-1064 …`) + `⚠️ overdue` / `⭐`
-   (priority `"1"`) / `⛔` (kanban_state `"blocked"`), each linked. **Never show
-   the numeric id.** No tasks → say exactly that.
+   (priority `"1"`) / `⛔` (kanban_state `"blocked"`), each linked.{% if task_keys %} **Never show
+   the numeric id.**{% endif %} No tasks → say exactly that.
 
 ## Steps — send mode
 
@@ -66,7 +72,7 @@ overrides the {{ identity }} (list mode only).
    board/priority order):
    `search_read` `project.task`,
    domain `[["user_ids", "in", [<uid>]], ["is_closed", "=", false]]`,
-   fields `["key", "name", "project_id", "stage_id", "date_deadline", "planned_hours", "effective_hours", "kanban_state", "sequence", "priority"]`,
+   fields `[{% if task_keys %}"key", {% endif %}"name", "project_id", "stage_id", "date_deadline", "planned_hours", "effective_hours", "kanban_state", "sequence", "priority"]`,
    order `"sequence asc, date_deadline asc, id asc"`.
    (Cost rule: never request `description`.) None found → status says
    "no open tasks"; stop.
