@@ -10,6 +10,9 @@
 # Still loopback only, so the prod copy never reaches the LAN. Stop the session's
 # service first when the run updates modules (-u / -i): one process per DB.
 #
+# Runs on one env take turns on an exclusive flock of .worktrees/_env/<slug>/test.lock,
+# held for the whole Odoo run: a second run waits, a run wrapped in that flock runs under it.
+#
 # Two runs that would exit 0 having tested nothing are refused:
 #   - a module in -u that the session DB does not have installed (a seed dump
 #     older than the module), or a -u/-i list with a space (Odoo reads ' name'
@@ -30,7 +33,35 @@ shift
 DB="$(db_name_for "$SLUG")"
 CONF="$WT_ENVROOT/$SLUG/odoo.conf"
 [ -f "$CONF" ] || { echo "ERROR: no session conf at $CONF - run wt-start.sh $SLUG first" >&2; exit 1; }
-PORT="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
+TEST_LOCK="$WT_ENVROOT/$SLUG/test.lock"
+
+# Whether this process or one up its parent chain holds the lock, as in a run wrapped
+# in `flock <lock>`: waiting would wait on itself. fdinfo lists the locks an fd holds.
+held_by_caller() {
+    local lock_id pid=$$ fdinfo
+    lock_id="$(stat -c %d:%i "$TEST_LOCK")"
+    while [ "${pid:-0}" -gt 1 ]; do
+        while read -r fdinfo; do
+            [ "$(stat -Lc %d:%i "/proc/$pid/fd/${fdinfo##*/}" 2>/dev/null)" != "$lock_id" ] || return 0
+        done < <(grep -ls '^lock:.*FLOCK' "/proc/$pid/fdinfo/"*)
+        pid="$(awk '/^PPid:/ {print $2}' "/proc/$pid/status" 2>/dev/null)"
+    done
+    return 1
+}
+
+# " (pid N: command)" of the holder when known: a wt-test.sh holder writes its pid into
+# the file, as the flock(1) that took the lock for it is gone; a wrapper's is in /proc/locks.
+lock_holder() {
+    local inode pid
+    inode="$(stat -c %i "$TEST_LOCK")"
+    for pid in $(tr -cd '0-9\n' < "$TEST_LOCK") $(awk -v inode=":$inode" \
+            '$2 == "FLOCK" && substr($6, length($6) - length(inode) + 1) == inode {print $5}' /proc/locks 2>/dev/null); do
+        if [ -r "/proc/$pid/cmdline" ]; then
+            printf ' (pid %s: %s)' "$pid" "$(tr '\0' ' ' < "/proc/$pid/cmdline" | sed 's/ $//')"
+            return 0
+        fi
+    done
+}
 
 # What the run installs and updates, and whether Odoo counts its tests: only
 # --test-enable and --test-tags set the test_enable its summary line needs.
@@ -65,6 +96,19 @@ for modules in "$UPDATE" "$INIT"; do
     esac
 done
 
+# Taken before the module-state check: the run being waited for may install a module. Odoo
+# inherits fd 9 through the exec below; append mode keeps a waiter from wiping the holder's pid.
+exec 9>>"$TEST_LOCK"
+if flock -n 9; then
+    echo "$$" > "$TEST_LOCK"
+elif held_by_caller; then
+    echo "STATUS: a caller of this run holds $TEST_LOCK (a flock wrapper?): running under its lock" >&2
+else
+    echo "STATUS: another run on $DB holds $TEST_LOCK$(lock_holder) - waiting for it to end, then running" >&2
+    flock 9
+    echo "$$" > "$TEST_LOCK"
+fi
+
 if [ -n "$UPDATE" ]; then
     # Any update run loads 'to upgrade' and 'to install' modules, and installs
     # those in -i; 'all' names no module.
@@ -85,6 +129,8 @@ SQL
     fi
 fi
 
+# Picked under the lock: one chosen before a long wait may be taken by then.
+PORT="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
 ODOO=("$HOME/{{ nix_profile_rel }}/bin/odoo" -c "$CONF" --workers 0 --stop-after-init --logfile=
       --http-interface 127.0.0.1 --http-port "$PORT" --db-filter "^${DB}\$")
 

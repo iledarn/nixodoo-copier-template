@@ -4,9 +4,19 @@
 # run Odoo's native neutralization (`odoo neutralize` — every installed module's
 # data/neutralize.sql: mail blocked, crons off, O2O backend deactivated, banner
 # on), then the shared $PROJ/nix/scripts/dev-fixup.sql (admin/admin, requeue
-# stuck queue jobs, bump the document sequences past the dump's imported names). Needs the session odoo.conf — wt-start writes it first.
+# stuck queue jobs, bump the document sequences past the dump's imported names).
+# Between the two, the schema catches up with the worktree's code: one `odoo -u`
+# of the installed custom modules whose files differ between the worktree and the
+# last origin/{{ odoo_version }} commit before the dump's day, read from its name
+# <db>_YYYY-MM-DD-HH-MM-SS.dump (named otherwise: every installed custom module).
+# A dump older than the code otherwise fails the registry load on a column added
+# since. The day starts at its earliest instant anywhere (UTC+14), as the name's
+# clock is the dump host's: a needless update costs minutes, a missed one breaks
+# the session.
+# Needs the session odoo.conf and worktree — wt-start makes both first.
 # All of it runs under wt_<slug>_restoring; the DB takes its real name only once
-# neutralized, so the session's service never sees the raw copy.
+# neutralized and updated, so the session's service never sees the raw copy, and
+# a failed step drops the copy and its filestore and fails the restore.
 # Idempotent: if wt_<slug> already exists it is reused (re-run wt-start is cheap).
 #
 # Usage: wt-restore.sh <slug>
@@ -16,6 +26,9 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/wt-common.sh"
 SLUG="${1:?usage: wt-restore.sh <slug>}"
 DB="$(db_name_for "$SLUG")"
 CONF="$WT_ENVROOT/$SLUG/odoo.conf"
+WT_PATH="$WT_ROOT/$SLUG"
+FILESTORE="$WT_ENVROOT/$SLUG/data/filestore"   # <data_dir>/filestore/<db>, data_dir as wt-start writes it
+ODOO_BIN="$HOME/{{ nix_profile_rel }}/bin/odoo"
 
 # Reuse only a COMPLETE restore: database.is_neutralized is missing on a DB
 # left by an interrupted run of the pre-staging script (the old bare-existence
@@ -30,6 +43,35 @@ fi
 DUMP="$(ls -1t "$BACKUP_DIR"/*.dump 2>/dev/null | head -1 || true)"
 [ -n "$DUMP" ] || { echo "ERROR: no dump in $BACKUP_DIR — {% if backup_s3_bucket %}run \`nix run .#download-backup\`{% else %}put a prod dump into backup/{% endif %} first" >&2; exit 1; }
 [ -f "$CONF" ] || { echo "ERROR: $CONF missing — wt-start writes it before the restore" >&2; exit 1; }
+[ -d "$WT_PATH" ] || { echo "ERROR: $WT_PATH missing — wt-start adds the worktree before the restore" >&2; exit 1; }
+
+# Mainline's base against the working tree: the dump has no session-branch commit, whatever its
+# date, and the farm serves uncommitted changes. --first-parent dates a merged branch by its merge.
+changed_modules() {
+    local base="" paths module
+    if [ -n "$1" ]; then
+        base="$(git -C "$WT_PATH" rev-list -1 --first-parent --before="${1}T00:00:00+14:00" "origin/{{ odoo_version }}")" || return 1
+    fi
+    [ -n "$base" ] || base="$(git -C "$WT_PATH" hash-object -t tree /dev/null)"   # day unknown, or history starts after it
+    # --no-renames: a moved file names the module it left too
+    paths="$(git -C "$WT_PATH" -c core.quotePath=false diff --no-renames --name-only "$base" --)" || return 1
+    cut -d/ -f1 <<< "$paths" | sort -u | while read -r module; do
+        if [ -f "$WT_PATH/$module/__manifest__.py" ]; then echo "$module"; fi
+    done
+}
+
+if [[ "$(basename "$DUMP")" =~ _([0-9]{4}-[0-9]{2}-[0-9]{2})-[0-9]{2}-[0-9]{2}-[0-9]{2}\.dump$ ]]; then
+    DUMP_DAY="${BASH_REMATCH[1]}"
+    SCOPE="changed since the dump ($DUMP_DAY)"
+else
+    DUMP_DAY=""
+    SCOPE="of the worktree (the dump's day is unknown)"
+    echo "WARNING: $(basename "$DUMP") is not named <db>_YYYY-MM-DD-HH-MM-SS.dump, so the code it" \
+         "matches is unknown: every installed custom module gets updated" >&2
+fi
+# Listed before the restore, so a git error costs no pg_restore.
+CHANGED="$(changed_modules "$DUMP_DAY")" \
+    || { echo "ERROR: cannot list the custom modules $SCOPE in $WT_PATH" >&2; exit 1; }
 
 RESTORE_LOG="$WT_ENVROOT/$SLUG/pg_restore.log"
 # Parallel restore, deliberately capped lower than a lone restore: worktree
@@ -44,23 +86,68 @@ if [ "$RESTORE_JOBS" -gt 4 ]; then RESTORE_JOBS=4; fi
 # prod's overdue crons on it, mailing real people, and its writes can make
 # `odoo neutralize` fail on a serialization conflict. Hence the staging name.
 STAGING_DB="${DB}_restoring"
+drop_staging() {
+    rm -rf "${FILESTORE:?}/$STAGING_DB" || true
+    $PSQL -d postgres -c "DROP DATABASE IF EXISTS $STAGING_DB WITH (FORCE);" >/dev/null
+}
+abort_restore() {
+    echo "ERROR: $1" >&2
+    exit 1
+}
+# Until the rename every exit drops the copy, set -e's included: a neutralized but
+# unfinished copy left behind would only confuse the next run.
+STAGING_OPEN=1
+on_exit() {
+    local rc=$?
+    # set -e still holds in a trap: one failed step must not skip the rest of the cleanup.
+    set +e
+    [ -n "$STAGING_OPEN" ] || return 0
+    drop_staging
+    echo "ERROR: the restore stopped (exit $rc) before $DB was ready: $STAGING_DB and its filestore dropped" >&2
+}
+trap on_exit EXIT
+
 echo "STATUS: restoring $STAGING_DB from $(basename "$DUMP") … ($RESTORE_JOBS jobs, errors: $RESTORE_LOG)"
-$PSQL -d postgres -c "DROP DATABASE IF EXISTS $STAGING_DB WITH (FORCE);" >/dev/null
+drop_staging
 $PSQL -d postgres -c "CREATE DATABASE $STAGING_DB OWNER {{ db_user }};" >/dev/null
 pg_restore --clean --no-acl --no-owner -j "$RESTORE_JOBS" -h localhost -p {{ postgres_port }} -U {{ db_user }} -d "$STAGING_DB" "$DUMP" 2>"$RESTORE_LOG" || true
 
 [ "$($PSQL -d "$STAGING_DB" -tAc "SELECT count(*) FROM res_users" 2>/dev/null)" -gt 0 ] 2>/dev/null \
-    || { $PSQL -d postgres -c "DROP DATABASE IF EXISTS $STAGING_DB WITH (FORCE);" >/dev/null
-         echo "ERROR: restore incomplete (res_users empty) — see $RESTORE_LOG" >&2; exit 1; }
+    || abort_restore "restore incomplete (res_users empty) — see $RESTORE_LOG"
 
 echo "STATUS: neutralizing $STAGING_DB (odoo neutralize) …"
-{{ project_dir_var }}="$PROJ" odoo neutralize -c "$CONF" -d "$STAGING_DB" \
-    || { $PSQL -d postgres -c "DROP DATABASE IF EXISTS $STAGING_DB WITH (FORCE);" >/dev/null
-         echo "ERROR: neutralization failed — the raw prod copy was dropped" >&2; exit 1; }
+{{ project_dir_var }}="$PROJ" "$ODOO_BIN" neutralize -c "$CONF" -d "$STAGING_DB" \
+    || abort_restore "neutralization failed"
+
+INSTALLED="$($PSQL -d "$STAGING_DB" -tAc "SELECT name FROM ir_module_module WHERE state IN ('installed', 'to upgrade')")" \
+    || abort_restore "cannot read the installed modules of $STAGING_DB"
+UPDATE_MODULES="$(LC_ALL=C comm -12 <(LC_ALL=C sort -u <<< "$CHANGED") <(LC_ALL=C sort -u <<< "$INSTALLED") | paste -sd, -)"
+if [ -z "$UPDATE_MODULES" ]; then
+    echo "STATUS: no custom module $SCOPE is installed: no update"
+else
+    UPDATE_LOG="$WT_ENVROOT/$SLUG/update.log"
+    : > "$UPDATE_LOG"
+    # no -i for a dependency a changed manifest gained: button_upgrade installs it
+    echo "STATUS: updating $STAGING_DB, custom modules $SCOPE: $UPDATE_MODULES (log: $UPDATE_LOG) …"
+    {{ project_dir_var }}="$PROJ" "$ODOO_BIN" -c "$CONF" -d "$STAGING_DB" -u "$UPDATE_MODULES" --stop-after-init --logfile="$UPDATE_LOG" \
+        || { tail -n 20 "$UPDATE_LOG" >&2 || true
+             abort_restore "updating $UPDATE_MODULES failed (log: $UPDATE_LOG)"; }
+fi
 
 # Dev fixups (psql continues past any table this dump lacks).
 $PSQL -d "$STAGING_DB" -f "$PROJ/nix/scripts/dev-fixup.sql" || true
 
+# Attachments live under filestore/<db name>, which a SQL rename leaves behind: moved first, so
+# wt_<slug> never exists without them. Content-addressed, so merging into an older dir is safe.
+if [ -d "$FILESTORE/$STAGING_DB" ]; then
+    if [ -d "$FILESTORE/$DB" ]; then
+        cp -a "$FILESTORE/$STAGING_DB/." "$FILESTORE/$DB/"
+        rm -rf "${FILESTORE:?}/$STAGING_DB"
+    else
+        mv "$FILESTORE/$STAGING_DB" "$FILESTORE/$DB"
+    fi
+fi
 $PSQL -d postgres -c "DROP DATABASE IF EXISTS $DB WITH (FORCE);" >/dev/null
 $PSQL -d postgres -c "ALTER DATABASE $STAGING_DB RENAME TO $DB;" >/dev/null
+STAGING_OPEN=""
 echo "STATUS: db-ready ($DB)"
