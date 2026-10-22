@@ -20,6 +20,9 @@ jobs:
 
   generate:
     runs-on: ubuntu-latest
+    env:
+      # the binary is the test kit (claude-code/testing): bump it on purpose, not by drift
+      CLAUDE_CODE_VERSION: 2.1.299
     strategy:
       fail-fast: false
       matrix:
@@ -78,23 +81,43 @@ jobs:
           shopt -s nullglob
           for f in /tmp/gen/.agents/*.json /tmp/gen/.agents/plugins/*/*.json /tmp/gen/.agents/plugins/*/sidecars/*/*.json; do python3 -m json.tool "$f" > /dev/null; done
           python3 tests/test_antigravity_hook.py
-      - name: Mods' tests (claude plugin test)
-        env:
-          # the binary is the test kit (claude-code/testing): bump it on purpose, not by drift
-          CLAUDE_CODE_VERSION: 2.1.299
+      - name: Mods in this render
+        id: mods
         run: |
           shopt -s nullglob
           mods=(/tmp/gen/.claude/skills/*/.claude-plugin)
-          if [ ${#mods[@]} -eq 0 ]; then echo "no mods in this render"; exit 0; fi
+          echo "count=${#mods[@]}" >> "$GITHUB_OUTPUT"
+      # The binary comes from the cache: every matrix job downloading it at once got 429s and
+      # cut HTTP/2 streams from downloads.claude.ai. A cache miss (a new version, or one unused
+      # for 7 days) downloads it once per job, retried, and caches it only once its checksum matches.
+      - name: Claude Code binary (cache)
+        id: claude-cache
+        if: steps.mods.outputs.count != '0'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/claude-code-bin
+          key: claude-code-${{ env.CLAUDE_CODE_VERSION }}-linux-x64
+      - name: Claude Code binary (download on a cache miss)
+        if: steps.mods.outputs.count != '0' && steps.claude-cache.outputs.cache-hit != 'true'
+        run: |
           base=https://downloads.claude.ai/claude-code-releases/$CLAUDE_CODE_VERSION
-          curl -fsSL "$base/linux-x64/claude" -o /tmp/claude
-          echo "$(curl -fsSL "$base/manifest.json" | jq -r '.platforms["linux-x64"].checksum')  /tmp/claude" | sha256sum -c -
+          # no --retry-delay: curl backs off 1s, 2s, 4s ... and waits out a 429's Retry-After
+          get() { curl -fsSL --retry 6 --retry-all-errors --retry-max-time 300 "$@"; }
+          get "$base/linux-x64/claude" -o /tmp/claude
+          echo "$(get "$base/manifest.json" | jq -r '.platforms["linux-x64"].checksum')  /tmp/claude" | sha256sum -c -
           chmod +x /tmp/claude
+          mkdir -p ~/.cache/claude-code-bin
+          mv /tmp/claude ~/.cache/claude-code-bin/claude
+      - name: Mods' tests (claude plugin test)
+        if: steps.mods.outputs.count != '0'
+        run: |
+          shopt -s nullglob
+          claude=~/.cache/claude-code-bin/claude
           rc=0
-          for m in "${mods[@]}"; do
+          for m in /tmp/gen/.claude/skills/*/.claude-plugin; do
             mod=$(dirname "$m")
             echo "::group::${mod##*/}"
-            (cd "$mod" && /tmp/claude plugin test .) || { rc=1; echo "::error::${mod##*/}: tests failed"; }
+            (cd "$mod" && "$claude" plugin test .) || { rc=1; echo "::error::${mod##*/}: tests failed"; }
             echo "::endgroup::"
           done
           exit $rc
