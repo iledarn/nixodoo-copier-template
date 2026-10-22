@@ -494,10 +494,45 @@ export function addressOf(to: unknown): string {
   return typeof to === 'string' ? to.replace(/\s*\[[^\]]*\]\s*$/, '').trim() : ''
 }
 
+// A pipeline split over two sessions: the mother grills and closes, a child develops and opens the PR.
+// The child loads the skill as `child <TASK-KEYS>`; the mother starts it with a `[child] ` title.
+const CHILD_ARGS = /^\s*child\b/i
+const CHILD_TITLE = /^\[child\] /
+
+export function isChildArgs(args: string): boolean {
+  return CHILD_ARGS.test(args)
+}
+
+// the session tool starting (or proposing) a child session of the pipeline
+export function isChildStart(tool: string, input: Record<string, unknown>): boolean {
+  return tool.endsWith('__start_session') && typeof input.title === 'string' && CHILD_TITLE.test(input.title)
+}
+
+// A mother's run a child may take its gates from: in progress, working on `task` (as its task or a
+// task of its block), with the Teams status and the grill opened there.
+export function isMotherRunFor(other: Run, task: string): boolean {
+  return isActive(other) && task !== '' && (other.task === task || hasTask(other, task)) && closedForDev(other).length === 0
+}
+
+// A child's run takes the status and grill gates the person opened in the mother; a gate the child
+// opened itself stays as it is. Its QC gate is its own: the mother never had one to give.
+export function takeGates(run: Run, mother: Run, motherId: string, now: number): Run {
+  const taken = (own: Gate | null, given: Gate | null): Gate | null =>
+    isOpen(own) || given === null ? own : { isOpen: true, how: `${given.how} (in the mother session)`, at: now }
+  return { ...run, status: taken(run.status, mother.status), grill: taken(run.grill, mother.grill), mother: motherId }
+}
+
+export function handOff(run: Run, now: number): Run {
+  return { ...run, handedOffAt: now }
+}
+
 export function enterPhase(run: Run, phase: number, task: string, now: number): Run | string {
   if (!Number.isInteger(phase) || phase < 0 || phase >= PHASES.length) return `phase must be 0 to ${PHASES.length - 1}`
   if (phase >= 2 && closedForDev(run).length > 0) return devRefusal(run, `Phase ${phase}`)
-  if (phase >= 6 && !qcHolds(run)) return prRefusal(run)
+  // a mother that handed the run to a child closes it without a QC pass of its own: the child's
+  // run holds the QC gate in front of its gh pr create; the mother never opens a PR
+  const isClosureAfterHandOff = phase === PHASES.length - 1 && run.handedOffAt !== undefined
+  if (phase >= 6 && !qcHolds(run) && !isClosureAfterHandOff) return prRefusal(run)
   // development entered anew (the next task of a block) counts its rounds afresh; back from QC it does not
   const isNewCycle = phase === 2 && run.phase !== 2 && run.phase !== 3
   return {

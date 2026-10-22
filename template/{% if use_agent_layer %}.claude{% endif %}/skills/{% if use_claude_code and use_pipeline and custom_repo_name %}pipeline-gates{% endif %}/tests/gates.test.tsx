@@ -7,8 +7,13 @@ import { HAS_STATUS_GATE, ODOO_WEB_URL, TASK_URL_BASE, TICKET_PREFIXES } from '.
 import {
   addTasks,
   blockLine,
+  closedForDev,
   enterPhase,
+  handOff,
+  isChildArgs,
+  isChildStart,
   isDocPath,
+  isMotherRunFor,
   isNewRound,
   isPrCreate,
   isWorktreeCode,
@@ -19,6 +24,7 @@ import {
   recordVerdict,
   roundsLeft,
   startRound,
+  takeGates,
   taskKeyIn,
   taskKeysIn,
   taskUrlIn,
@@ -223,6 +229,37 @@ describe('rules', () => {
     const next = enterPhase({ ...run, phase: 5 }, 2, `${K}-2`, 11)
     if (typeof next === 'string') throw new Error(next)
     expect([next.fixRounds, isNewRound(next)]).toEqual([0, false])
+  })
+
+  test('a child takes the gates its mother opened; a mother that handed off closes without a pass', () => {
+    const mother = openGate(openGate(newRun(`${K}-9`, 0), 'status', 'sent', 1), 'grill', 'confirmed by you', 1)
+    expect(isMotherRunFor(mother, `${K}-9`)).toBe(true)
+    expect(isMotherRunFor(mother, `${K}-8`)).toBe(false)
+    expect(isMotherRunFor(mother, '')).toBe(false)
+    expect(isMotherRunFor({ ...mother, isDone: true }, `${K}-9`)).toBe(false)
+    expect(isMotherRunFor(openGate(newRun(`${K}-9`, 0), 'status', 'sent', 1), `${K}-9`)).toBe(false)
+    expect(isMotherRunFor(addTasks(mother, [`${K}-10`], 2), `${K}-10`)).toBe(true)
+
+    const child = takeGates(newRun(`${K}-9`, 5), mother, 'sid-mother', 6)
+    expect(closedForDev(child)).toEqual([])
+    expect([child.mother, child.grill?.how, child.qc]).toEqual(['sid-mother', 'confirmed by you (in the mother session)', null])
+    const own = takeGates(openGate(newRun(`${K}-9`, 5), 'grill', 'confirmed here', 5), mother, 'sid-mother', 6)
+    expect(own.grill?.how).toBe('confirmed here')
+    expect(typeof enterPhase(child, 2, '', 7)).not.toBe('string')
+    expect(typeof enterPhase(child, 6, '', 7)).toBe('string')
+
+    expect(typeof enterPhase(mother, 7, '', 8)).toBe('string')
+    expect(typeof enterPhase(handOff(mother, 8), 6, '', 9)).toBe('string')
+    const closed = enterPhase(handOff(mother, 8), 7, '', 9)
+    if (typeof closed === 'string') throw new Error(closed)
+    expect(closed.isDone).toBe(true)
+
+    expect([isChildArgs(`child ${K}-9`), isChildArgs(` Child ${K}-9 ${K}-10`)]).toEqual([true, true])
+    expect([isChildArgs(`${K}-9 child`), isChildArgs('children of the block'), isChildArgs('')]).toEqual([false, false, false])
+    expect(isChildStart('mcp__ccd_session__start_session', { title: `[child] ${K}-9 label printer` })).toBe(true)
+    expect(isChildStart('mcp__ccd_session__start_session', { title: 'Fix the docs' })).toBe(false)
+    expect(isChildStart('mcp__ccd_session__start_session', { proposal_id: 'task_1' })).toBe(false)
+    expect(isChildStart('Agent', { title: `[child] ${K}-9` })).toBe(false)
   })
 })
 
@@ -607,4 +644,58 @@ test('each fix round goes to a fresh dev agent, and a fourth waits for you', asy
   expect(granted.text).toContain('fix rounds: 3 of 6')
   expect((await $.tool.call(DEV)).deny).toBeUndefined()
   expect(String((await $.tool.call({ tool: 'mcp__pipeline-gates__gates' })).result)).toContain('fix rounds: 4 of 6')
+})
+
+// the run of a mother session as the store holds it: the person sent the status and confirmed the grill
+function motherRun(task: string, grill = true) {
+  const sent = openGate({ ...newRun(task, 0), phase: 1 }, 'status', 'sent to 19:status…', 1)
+  return grill ? openGate(sent, 'grill', 'confirmed by you', 2) : sent
+}
+
+test('a child session runs on the gates the person opened in its mother; its PR still waits for its own QC pass', async ($, on) => {
+  engine(on, [], undefined, { 'run:sid-mother': motherRun(`${K}-9`) })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'Skill', skill: 'pipeline', args: `child ${K}-9` })
+
+  expect((await $.tool.call(DEV)).deny).toBeUndefined()
+  expect((await $.tool.call({ tool: 'Write', file_path: `${WT}/models/a.py`, content: 'x' })).deny).toBeUndefined()
+  const entered = String((await $.tool.call({ tool: 'mcp__pipeline-gates__phase', phase: 2, task: `${K}-9` })).result)
+  expect(entered).toContain('grill alignment: confirmed by you (in the mother session)')
+  expect(entered).toContain('dev allowed: yes · PR allowed: no')
+  expect((await $.tool.call({ tool: 'Bash', command: 'gh pr create --fill' })).deny).toContain('QC gate passes')
+})
+
+test("only a child takes a mother's gates, and only where the person opened both for its task", async ($, on) => {
+  engine(on, [], undefined, { 'run:sid-mother': motherRun(`${K}-9`), 'run:sid-shut': motherRun(`${K}-7`, false) })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  const closed = HAS_STATUS_GATE ? 'Teams status and grill alignment gates are closed' : 'grill alignment gate is closed'
+
+  // a second mother for the same task is no child: it runs its own status and grill
+  await $.tool.call({ tool: 'Skill', skill: 'pipeline', args: `${K}-9` })
+  expect((await $.tool.call(DEV)).deny).toContain(closed)
+  // a child whose mother has no confirmed grill waits, as does one with no mother at all
+  await $.tool.call({ tool: 'Skill', skill: 'pipeline', args: `child ${K}-7` })
+  expect((await $.tool.call(DEV)).deny).toContain('grill alignment')
+  await $.tool.call({ tool: 'Skill', skill: 'pipeline', args: `child ${K}-8` })
+  expect((await $.tool.call(DEV)).deny).toContain(closed)
+})
+
+test('a mother that started a child closes its run at Phase 7 without a QC pass of its own', async ($, on) => {
+  engine(on)
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  await $.command.run({ command: 'pipeline-gate', args: `start ${K}-9`, ...TYPED })
+  await $.command.run({ command: 'pipeline-gate', args: 'open status teams is down', ...TYPED })
+  await $.command.run({ command: 'pipeline-gate', args: 'open grill agreed in chat', ...TYPED })
+  await $.tool.call({ tool: 'mcp__pipeline-gates__phase', phase: 1, task: `${K}-9` })
+  const phase7 = { tool: 'mcp__pipeline-gates__phase', phase: 7 } as const
+  expect(String((await $.tool.call(phase7)).result)).toContain('QC gate passes')
+
+  // a session that is no child of the pipeline is no hand-off
+  await $.tool.call({ tool: 'mcp__ccd_session__start_session', title: 'Fix the docs', initiation: 'own_initiative', prompt: 'x' })
+  expect(String((await $.tool.call(phase7)).result)).toContain('QC gate passes')
+
+  await $.tool.call({ tool: 'mcp__ccd_session__start_session', title: `[child] ${K}-9 label printer`, initiation: 'own_initiative', prompt: 'brief' })
+  expect(String((await $.tool.call({ tool: 'mcp__pipeline-gates__gates' })).result)).toContain('handed off to a child session')
+  expect((await $.tool.call({ tool: 'Bash', command: 'gh pr create --fill' })).deny).toContain('QC gate passes')
+  expect(String((await $.tool.call(phase7)).result)).toContain(`the pipeline run for ${K}-9 ended at Phase 7 Memory closure`)
 })

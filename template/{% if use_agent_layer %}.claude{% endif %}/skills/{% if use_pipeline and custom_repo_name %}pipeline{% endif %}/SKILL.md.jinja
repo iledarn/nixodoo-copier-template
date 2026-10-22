@@ -1,8 +1,8 @@
 {% set hours = 'planned_hours' if odoo_version == '16.0' else 'allocated_hours' %}
 ---
 name: pipeline
-description: "Full Odoo development lifecycle orchestrator. Chains subagents: task reading -> dev -> QC gate (review + validation, loops back to dev) -> docs -> demo GIF (optional, on the user's yes) -> PR. Three subagents: dev (writes code), review (read-only QC/review), documenter (writes module docs)."
-argument-hint: "[task URL or description]"
+description: "Full Odoo development lifecycle orchestrator, in two sessions: a mother (task reading, kb context, grill, status, ticket with test cases, brief) starts a child session (worktree env -> dev -> QC gate (review + validation, loops back to dev) -> docs -> demo GIF (optional, on the user's yes) -> PR) and afterwards verifies the PR, deploys on the user's command and closes the ticket. Without a session tool the whole pipeline runs in one session. Subagents: dev (writes code), review (read-only QC/review), documenter (writes module docs)."
+argument-hint: "[task URL or description] | child <TASK-KEYS>"
 ---
 
 # Odoo Development Pipeline
@@ -12,6 +12,39 @@ Pipeline orchestrator: manage the full dev lifecycle by spawning named subagents
 ## Task
 
 $ARGUMENTS
+
+---
+
+## Sessions: mother and child
+
+A run is split over two sessions so that neither carries the other's context: the grill
+and the ticket work stay out of the dev rounds, and the dev rounds stay out of the session
+that deploys and closes.
+
+| Session | Runs | Hands over |
+|---------|------|------------|
+| **mother** | Phase 0, Phase 1 (the task, what kb knows, the grill, the status, the ticket with test cases), then the brief and the child's start; afterwards the PR and CI check, the deploy on the user's command, Phase 7 | the brief |
+| **child** | its own worktree env, Phase 2 dev, 3 QC gate, 4 docs, 5 demo GIF, 6 PR, a session note | the report |
+
+- **Which one is this session?** A child is started with a pipeline brief: its title starts
+  with `[child] `, and it loads this skill with `child <TASK-KEYS>`. A child follows
+  [Child session](#child-session) and skips Phase 0's kb task, Phase 1 and Phase 7. Every other
+  start of this skill is a mother, or a single session (next point).
+- **No session tool, one session.** When `mcp__ccd_session__start_session` is neither loaded
+  nor listed as a deferred tool (terminal `claude`, Antigravity, a teammate without the
+  desktop app), the whole pipeline runs in this one session, Phases 0 to 7 in order, as
+  written below. Say so in one line ("No session tool here: the whole pipeline runs in this
+  session.") and skip the hand-off.
+- **Grouping is the mother's call.** Related tickets (the same module or the same files) go
+  to ONE child: one worktree env, one PR. Independent tickets go to separate children,
+  started in parallel, each with its own brief.
+- **Questions go up, never sideways.** A child that meets an ambiguity asks the mother with
+  `SendMessage` (the session that started it) and waits; it never guesses one of the user's
+  decisions. The mother asks the user, records the answer on the ticket (a `Design Decision`
+  note per `odoo-tickets`), and replies.
+- **After the PR the mother forwards, the child fixes.** Review comments and CI failures on
+  the PR go from the mother to the child that opened it (`SendMessage` to its session id);
+  the child fixes them in its env and reports again.
 
 ---
 
@@ -66,6 +99,8 @@ Maintain running lists across ALL phases:
 - `ALL_DECISIONS` — every DECISION returned, any phase
 
 These feed Phase 7 (Memory Closure). If a subagent forgets the closing block, ask it again — do not guess.
+In a split run the child keeps the lists and hands them to the mother in its report, which
+the mother's Phase 7 reads in their place.
 
 ## Agent economy
 
@@ -85,8 +120,10 @@ grows and how long it lives:
   `dev` runs the test classes it touched.
 - **Quiet output.** A test log goes to a file and the context gets its summary lines; a diff comes
   in as `--stat` unless the hunk is the point.
-- **One run per session.** A deploy or the next task starts in a new session: the ticket, kb and
-  the PR carry the state, and a session holding several runs re-reads all of them on every call.
+- **One run per session.** The next task starts in a new session: the ticket, kb and the PR
+  carry the state, and a session holding several runs re-reads all of them on every call. In a
+  split run the mother holds the run's ends (grill, deploy, closure) and the child its middle;
+  a block of tasks is one run for both.
 - **Subagents, not agent teams.** The phases are sequential and share one worktree and one
   database. A teammate is a long-lived context by design, spawns only in an interactive CLI
   session (the desktop app runs a named agent as a subagent), ignores the definition's `skills:`
@@ -154,10 +191,12 @@ is untouched; there is no main Odoo or main database to protect. **The model,
 scripts and gotchas live in the `worktree-env` skill — read it.** What the pipeline
 needs from it:
 
-- **Phase 1** runs `wt-start.sh <slug>` and captures its output as `<WT>` (worktree
+- **The session that develops** runs `wt-start.sh <slug>` (the child's first step; Phase 1
+  step 8 in a single session) and captures its output as `<WT>` (worktree
   path), `<CONF>` (session `odoo.conf`), `<URL>` (browser URL), `<DB>`, `<PORT>`, and
   with `--env-repo` `<ENVREPO>` (this project's own repo on branch `<slug>`).
-  Re-running `wt-start.sh <slug>` refreshes the env (idempotent).
+  Re-running `wt-start.sh <slug>` refreshes the env (idempotent). A mother never brings
+  up an env of its own.
 - **Phases 2–6** edit/test/PR using those: `git -C <WT> …`, `{{ odoo_cmd }} -c <CONF> …`,
   browser `<URL>`. All code/git happens in `<WT>`, never in `src/{{ custom_repo_name }}`.
 - **Phase 7** does NOT tear the env down on its own — the worktree is kept so
@@ -201,8 +240,19 @@ text:
   goes in before it: a `tasks` call after Phase 7 changes nothing.
 - Only the user opens a gate or ends a run by hand: `/pipeline-gate open <{% if status_mcp == 'teams' %}status|{% endif %}grill|qc|rounds> <reason>`,
   `/pipeline-gate end`. Never ask for that to get past a refusal you can satisfy.
+- **A split run** keeps a run in each session. The mother calls `phase` for 0, 1 and 7, the
+  child for 2 to 6, and each marks the block's tasks it works on. The child, loaded as
+  `child <TASK-KEYS>`, runs on the {% if status_mcp == 'teams' %}status and {% endif %}grill gates the user opened in the mother for
+  that task (their rows say "in the mother session"); its QC gate is its own, so its
+  `gh pr create` waits for its own pass. The mother's `start_session` with a `[child] ` title
+  marks its run handed off, so its Phase 7 needs no QC pass of its own. A child refused for a
+  closed {% if status_mcp == 'teams' %}status or {% endif %}grill gate tells the mother: the gate missing is the mother's.
 
 ### Phase 0: Memory Bootstrap
+
+The mother (or a single session) runs every step. A child runs Steps 1–3 only, for the
+subagents it spawns, and adds the rule records its brief names to the blob; the run's
+{% if use_kb %}kb task{% else %}WIP entry{% endif %} is the mother's, and the brief names it.
 
 {% if use_kb %}
 Subagents spawn with fresh context and do NOT inherit the session's standup or feedback rules. Load the rules from kb, build a **Project Rules Blob** to inject into subagent prompts, and give the run its kb task so it shows in the standup.
@@ -314,14 +364,19 @@ kb query 'MATCH (r:Record {external_id: $k}) RETURN r.id AS id, r.title AS title
 ```
 
 None yet (the ticket is not the user's yet, or the run starts from a description) →
-`kb add "<TASK-KEY or short title> — pipeline in progress" --scope {{ project_name }}`, and
+`kb add "<TASK-KEY or short title> — pipeline in progress" --scope {{ project_name }} --tag <area>`, and
 `kb promote <id> <TASK-KEY>` as soon as the key is known, so the next sync updates that record
 instead of adding a second one.
 
 {% else %}
-`kb add "<short title> — pipeline in progress" --scope {{ project_name }}`.
+`kb add "<short title> — pipeline in progress" --scope {{ project_name }} --tag <area>`.
 
 {% endif %}
+`<area>` is the module or subsystem the task is about, from the project's vocabulary
+(`kb tags`; the areas live in `.kb/tags.toml`). `kb add` refuses without one (exit 4). When it
+lists similar records instead (exit 5), the run's task is one of them if it names this work:
+take that id. Otherwise add it again with `--distinct`.
+
 Remember its id as `WIP_ID` — you close it in Phase 7 — and `kb append <WIP_ID> "Pipeline started."`,
 which links it to this session's record.
 {% else %}
@@ -392,6 +447,12 @@ Before spawning any subagent:
        `Test Cases`, per `odoo-tickets`): `search_read` `mail.message`
        `[["model", "=", "project.task"], ["res_id", "=", <id>], ["message_type", "=", "comment"]]`,
        fields `["date", "author_id", "body"]`, order `"date asc"`
+{% endif %}
+{% if use_kb %}
+   - **What kb knows** about the task's areas: `kb context <WIP_ID>`, as the `odoo-tickets`
+     start-work flow runs it (an untagged record is tagged first). Its knowledge records
+     feed the grill and the brief; read a body with `kb show <id>` only when its line
+     matters to this task.
 {% endif %}
 
 1. **Take the ticket into work** (start-work flow from `odoo-tickets`) —
@@ -574,6 +635,11 @@ Before spawning any subagent:
    model/engine/report, redesign, cross-module flow) run the **`grill` skill**
    and PAUSE until the user confirms its Alignment Summary; for a mechanical
    task ask clarifying questions in chat only if the scope is unclear.
+{% if use_kb %}
+   Before the grill, what kb knows about the task's areas: `kb context <WIP_ID>`. Exit 4
+   means the record has no area tag: `kb edit <WIP_ID> --tag <area>` (`kb tags` lists the
+   areas), then again. A kb that has no `context` command yet: say so in one line and go on.
+{% endif %}
 {% if status_mcp == 'teams' %}
 
 1. **Send the Teams status — HARD GATE: do NOT start Phase 2 until the status
@@ -588,9 +654,11 @@ Before spawning any subagent:
    big to ship as one clean PR, propose a **sub-task** split now (see "Sub-tasks
    & Blockers" above — user first, then link via `parent_id`).{% endif %}
 
-7. **Summarize** the task scope for subagents (include Technical Solution highlights)
+7. **Summarize** the task scope for subagents (include Technical Solution highlights). In a
+   split run this summary is the brief's Task section (see the hand-off below).
 
-8. **Bring up this session's isolated env.** Derive a branch slug from the task —
+8. **Bring up this session's isolated env** — in a single session only: in a split run the
+   child does this as its first step and the mother never does. Derive a branch slug from the task —
    `<{{ ticket_prefix.lower() }}-key-lower>-<short-kebab-desc>` (e.g. `{{ ticket_prefix.lower() }}-1234-cash-in-cogs`) — then:
    ```bash
    bash "${{ project_dir_var }}/.claude/skills/worktree-env/scripts/wt-start.sh" <slug>
@@ -607,7 +675,124 @@ Before spawning any subagent:
    the flag adds it to a running env. (Prereq: a seed dump in `backup/` — if `wt-start`
    reports none, ask the user to {% if backup_s3_bucket %}run `nix run .#download-backup` once{% else %}drop a prod dump into `backup/`{% endif %} first.)
 
-Report: "Starting pipeline for: <TASK-KEY> — <task summary>". Add the grill-gate outcome: "Grill gate: Alignment Summary confirmed (N questions, M assumptions)" or "Grill gate: skipped (mechanical task)".{% if tickets_mcp == 'odoo' %} {% if task_software_fields %}If clarifying questions were asked, add "N clarifying Q&A captured to the Technical Solution tab." If Technical Solution was enriched, add "Technical Solution auto-generated and written to the task. Please review." If Test Cases were generated, add "N test cases written to Test Cases tab."{% else %}If clarifying questions were asked, add "N clarifying Q&A posted as Design Decision notes." If Technical Solution was enriched, add "Technical Solution auto-generated and posted as a note. Please review." If Test Cases were generated, add "N test cases posted as a Test Cases note."{% endif %}{% endif %}
+Report: "Starting pipeline for: <TASK-KEY> — <task summary>". Add the grill-gate outcome: "Grill gate: Alignment Summary confirmed (N questions, M assumptions)" or "Grill gate: skipped (mechanical task)".{% if tickets_mcp == 'odoo' %} {% if task_software_fields %}If clarifying questions were asked, add "N clarifying Q&A captured to the Technical Solution tab." If Technical Solution was enriched, add "Technical Solution auto-generated and written to the task. Please review." If Test Cases were generated, add "N test cases written to Test Cases tab."{% else %}If clarifying questions were asked, add "N clarifying Q&A posted as Design Decision notes." If Technical Solution was enriched, add "Technical Solution auto-generated and posted as a note. Please review." If Test Cases were generated, add "N test cases posted as a Test Cases note."{% endif %}{% endif +%}
+
+---
+
+### Hand-off: the brief and the child (mother)
+
+In a split run the mother's Phase 1 ends here and a child takes Phases 2–6; a single
+session goes on to Phase 2.
+
+**Group the tasks.** Tickets on the same module or the same files are one group: one child,
+one worktree env, one PR. An independent ticket is a group of its own. Several groups start
+in parallel, one brief each.
+
+**Write the brief**, one per child, in these sections and this order. A child knows only what
+its brief says and what it reads itself, so the brief carries the decisions, not the
+conversation:
+
+    # Pipeline child: <TASK-KEYS> <one-line goal>
+    You are a child session of the pipeline. Load the pipeline skill with
+    `child <TASK-KEYS>` and follow its "Child session" part. Questions go to the
+    mother, the session that started you, with SendMessage; never guess the user's call.
+
+    ## Task
+    <each key with its ticket link and title>; the goal in two to four sentences;
+    slug <{{ ticket_prefix.lower() }}-key-lower>-<short-kebab-desc>; the run's {% if use_kb %}kb task{% else %}WIP entry{% endif %} [<WIP_ID>].
+    <the Phase-1 scope summary: modules, Technical Solution highlights>
+
+    ## Alignment Summary
+    <the confirmed Alignment Summary verbatim, or "Mechanical: grill skipped, <why>">
+
+    ## Rules
+    - [<id>] <one line: what the record means for this task>
+    (each knowledge record from `kb context` and each pinned rule that bears on the task)
+
+    ## Acceptance and test cases
+    <the acceptance bar in one to three lines>; <N> test cases ({% if tickets_mcp == 'odoo' %}{% if task_software_fields %}the ticket's Test Cases tab{% else %}the ticket's Test Cases note{% endif %}{% else %}the Phase-1 requirements{% endif %}):
+    Phase 3 verifies every one.
+
+    ## Do not
+    - <scope cuts, modules and files not to touch, decisions not to re-open,
+      what the grill ruled out>
+
+    ## Report
+    End with the child report, in the format of the pipeline skill.
+
+**Start the child** with `mcp__ccd_session__start_session`, one call per child:
+
+- `title`: `[child] <TASK-KEYS> <short title>`, under 60 characters. The `[child] ` prefix is
+  how the child's SessionStart hook knows to print the pinned rules and a standup count
+  instead of the whole index and standup, so it is never left out.
+- `prompt`: the brief. `background`: one paragraph on the run (the tickets, the grill's
+  outcome, where the tickets stand); the tool wants at least 80 characters of it.
+- `context: "fresh"` and `use_worktree: false`: addons work runs in this base checkout, in the
+  child's own worktree env, never in a Claude worktree of it, whose guard refuses every edit
+  under `.worktrees/`.
+- `initiation: "own_initiative"`, so the user starts the child from its card and the click is
+  their go for development; `"user_asked"` when they said in words to start it now.
+
+Report "Hand-off: child <name> for <TASK-KEYS> (card shown / started)"{% if use_kb %} and `kb append <WIP_ID> "child <session id> for <TASK-KEYS>"`{% endif %}.
+Then wait: a child's report reaches the mother as a note when its turn ends. Never poll it.
+
+**While a child works**, the mother answers its questions: ask the user, post the answer on
+{% if tickets_mcp == 'odoo' %}
+the ticket as a `Design Decision` note, reply to the child with `SendMessage`. What the user
+{% else %}
+the run's record, reply to the child with `SendMessage`. What the user
+{% endif %}
+says about the task in the mother goes to the child the same way.
+
+**After a child's report**, the mother:
+
+1. Checks the PR itself; a report is not proof: `gh pr view <url> --json
+   state,mergeable,statusCheckRollup` and `gh pr checks <url>`.
+2. Forwards what needs a fix: a red check with its failing log lines, or the PR's review
+   comments verbatim, with `SendMessage` to the child's session id. The child fixes in its
+   env, runs the QC gate again, pushes and reports again. The mother never edits a child's
+   worktree.
+{% if prod_ssh_host %}
+3. Deploys only on the user's command ("merge PR N and deploy"), with the `deploy` skill.
+{% else %}
+3. Merges only on the user's command.
+{% endif %}
+4. Runs Phase 7, with the lists from the child's report in place of its own.
+
+---
+
+### Child session
+
+A child starts from a brief, loads this skill with `child <TASK-KEYS>`, and runs:
+
+1. **Rules.** Phase 0, Steps 1–3: the Project Rules Blob for its subagents, with every rule
+   record the brief lists added. No {% if use_kb %}kb task{% else %}WIP entry{% endif %} of its own: the brief names the run's.
+2. **Its env.** Phase 1 step 8 with the brief's slug, which captures `<WT>`, `<CONF>`, `<URL>`,
+   `<DB>` and `<PORT>`{% if use_kb %}; `kb append <WIP_ID> "env <slug>"`{% endif %}.
+3. **Phases 2–6** as written below: dev, the QC gate (every test case of the brief), docs, the
+   demo GIF (the child asks the user itself), the PR.
+4. **An ambiguity** → one short question to the mother with `SendMessage`, then end the turn
+   and carry on when the answer comes. Never re-open the Alignment Summary on your own.
+{% if use_kb %}
+5. **A session note** before the report: `kb session note "<intent; PR and gate outcome;
+   decisions; open threads>"`. The run's record is the mother's Phase 7.
+{% else %}
+5. **No journal entry**: the mother's Phase 7 writes the run's.
+{% endif %}
+6. **The child report** is its last message. The mother's note quotes its first 400
+   characters, so the PR comes first:
+
+       PR <url> · CI <green | running | red: <check>> · QC <the gate report line>
+       Tasks: <KEY> done | partial: <what is left> | blocked: <why>
+       Env: <slug>, kept at <WT>
+       Demo GIF: attached | skipped
+       FILES_CHANGED: <ALL_FILES_CHANGED>
+       OPEN_THREADS: <ALL_OPEN_THREADS, or "none">
+       DECISIONS: <ALL_DECISIONS, or "none">
+
+After the report the child stays available. A review comment or a red check the mother
+forwards is a fix round: a fresh `dev` agent, the Phase 3 gate again, a push, a new report.
+A child never merges, deploys, closes the ticket or drops its env.
 
 ---
 
@@ -964,6 +1149,11 @@ Report: "PR created: <URL>"
 
 After the pipeline completes — success, abort, or user-interrupted — close out memory state. **Non-negotiable**; skipping it leaves WIP entries stale and loses session history.
 
+In a split run the mother runs this phase, after the last child report it waits for (the PR
+merged and deployed, or awaiting review, or the run blocked). `ALL_FILES_CHANGED`,
+`ALL_OPEN_THREADS` and `ALL_DECISIONS` are the child reports' lists, `<slug>` and `<WT>` the
+child's env. A child never runs Phase 7.
+
 When `mcp__pipeline-gates__tasks` is listed, mark the block's finished tasks `done` with it
 **before** you call `mcp__pipeline-gates__phase` for Phase 7: Phase 7 ends the run, and a `tasks`
 call after it changes nothing.
@@ -1009,8 +1199,12 @@ Each entry in `ALL_OPEN_THREADS` (accumulated across Phases 2–4) becomes a kb 
 the run:
 
 ```bash
-kb add "<description — file:line>" --scope {{ project_name }} --link RELATED:<WIP_ID>
+kb add "<description — file:line>" --scope {{ project_name }} --tag <area> --link RELATED:<WIP_ID>
 ```
+
+`<area>` is the area the thread is about (`kb tags`), often the run's own. Exit 5 lists similar
+records: a thread already on file gets `kb append <its id> "<what this run saw>"` instead;
+one that only looks alike goes in with `--distinct`.
 
 A thread becomes a ticket only when the user asks for one{% if tickets_mcp == 'odoo' %} (`odoo-tickets` creates it, then
 `kb promote <id> {% if task_keys %}<KEY>{% else %}<record id>{% endif %}`; a ticket for someone else gets the `odoo-tickets` handover note){% endif %}. Collect the new ids for the session record.
@@ -1079,10 +1273,11 @@ without context + a real trade-off. Each qualifying decision → write
 (task key inside). Most runs produce zero ADRs — that is the intended shape.
 Also flush any glossary terms that resolved during the run but were not yet
 written to `<ENVREPO>/CONTEXT.md`. A run with something to write here and no
-`<ENVREPO>` yet gets one first: `wt-start.sh <slug> --env-repo` (the DB is reused).
+`<ENVREPO>` yet gets one first: `wt-start.sh <slug> --env-repo` (the DB is reused; in a split
+run `<slug>` is the child's).
 {% if use_kb %}
 
-A decision that misses the ADR test but should outlive the chat → `kb add "<decision>" --kind decision --summary "<one line>" --link RELATED:<WIP_ID>`.
+A decision that misses the ADR test but should outlive the chat → `kb add "<decision>" --kind decision --summary "<one line>" --tag <area> --link RELATED:<WIP_ID>`.
 
 #### Step 3: Write the session record
 
@@ -1191,6 +1386,10 @@ append AFTER existing content.
 {% endif %}
 6. **Report** what was changed
 
+In a split run, feedback that reaches the mother after the hand-off is recorded there (steps
+1–2) and goes on to the child with `SendMessage`, which applies it (steps 3–4). Feedback the
+user gives the child directly is applied there and named in its report.
+
 ---
 
 ## Error Handling
@@ -1204,10 +1403,17 @@ append AFTER existing content.
 - On abort, do Phase 7 memory closure but **keep the worktree** — do NOT run
   `wt-stop.sh`; the env stays so work can resume, and teardown waits for the
   user's explicit go (Phase 7 Step 0)
+- A child that stops for good (a usage limit, a crash, a session the user stopped) is not
+  revived by messages: the mother starts a fresh child with the same brief plus where the
+  last one stopped (its last report, `git -C <WT> status --short` and `git -C <WT> log --oneline -5`).
+  The env is reused: `wt-start.sh <slug>` is idempotent
 
 ## Reporting
 
 After each phase: `Phase X/7: <Name> — <STATUS> + 1-2 sentence summary`
+
+A child ends with the child report (see [Child session](#child-session)); the mother ends with
+the final summary below, built from the child reports.
 
 Final summary:
 ```

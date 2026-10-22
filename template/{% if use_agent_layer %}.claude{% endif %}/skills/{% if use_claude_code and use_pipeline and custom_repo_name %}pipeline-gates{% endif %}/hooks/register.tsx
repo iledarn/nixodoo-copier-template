@@ -21,10 +21,14 @@ import {
   filePathOf,
   grantRounds,
   grillQuestion,
+  handOff,
   hasTask,
   isActive,
   isAwayGrillAnswer,
+  isChildArgs,
+  isChildStart,
   isDocPath,
+  isMotherRunFor,
   isNewRound,
   isOpen,
   isPrCreate,
@@ -42,6 +46,7 @@ import {
   roundsLine,
   roundsRefusal,
   startRound,
+  takeGates,
   taskCounts,
   taskKeyIn,
   taskKeysIn,
@@ -106,6 +111,25 @@ async function start($: EngineInterface, task: string, block: readonly string[] 
   }
   await save($, addTasks(newRun(task, now, HAS_STATUS_GATE), block, now, ODOO_WEB_URL))
   void $.ui.open({ id: PANE, title: 'pipeline' })
+}
+
+// A child session takes the gates the person opened in its mother: the newest run of another session
+// that works on `task` with the Teams status and the grill open. The store holds every session's run.
+async function adoptMother($: EngineInterface, task: string): Promise<boolean> {
+  const current = await read($, run)
+  if (!isActive(current) || task === '' || closedForDev(current).length === 0) return false
+  const mine = `run:${await $.session.id()}`
+  let mother: { id: string; run: Run } | null = null
+  for (const key of await $.store.keys()) {
+    if (!key.startsWith('run:') || key === mine) continue
+    const other = (await $.store.get(key)) as Run | null | undefined
+    if (other !== null && other !== undefined && isMotherRunFor(other, task) && (mother === null || other.startedAt > mother.run.startedAt)) {
+      mother = { id: key.slice('run:'.length), run: other }
+    }
+  }
+  if (mother === null) return false
+  await save($, takeGates(current, mother.run, mother.id, await $.clock.now()))
+  return true
 }
 
 async function restore($: EngineInterface): Promise<void> {
@@ -216,6 +240,9 @@ function describe(current: Run | null): string {
     `QC evidence since the last code change: review ${evidence.review ? 'yes' : 'no'}, green tests ${evidence.tests ? 'yes' : 'no'}${current.lastTests ? ` (last run: ${current.lastTests})` : ''}`,
     `dev allowed: ${closedForDev(current).length === 0 ? 'yes' : 'no'} · PR allowed: ${qcHolds(current) ? 'yes' : 'no'}`,
     roundsLine(current),
+    ...(current.handedOffAt === undefined
+      ? []
+      : ['handed off to a child session: its run holds the QC gate and the PR; Phase 7 closes this one without a pass of its own']),
   ].join('\n')
 }
 
@@ -258,7 +285,7 @@ export const register: Register = on => {
     await $.tool.register({
       name: 'phase',
       description:
-        "Records that the pipeline enters a phase (0 memory bootstrap ... 7 memory closure), with the task key once known. Call it at the start of every phase. Refused for Phase 2 and later while the Teams status gate or the grill gate is closed, and for Phase 6 and later until the QC verdict passed; the refusal says what is missing. Starts the run when none is active.",
+        "Records that the pipeline enters a phase (0 memory bootstrap ... 7 memory closure), with the task key once known. Call it at the start of every phase. Refused for Phase 2 and later while the Teams status gate or the grill gate is closed, and for Phase 6 and later until the QC verdict passed; the refusal says what is missing. A child session (the pipeline skill loaded as `child <TASK-KEYS>`) runs on the status and grill gates the person opened in its mother; a mother that started a `[child] ` session closes Phase 7 without a QC pass of its own, since the child's run holds that gate. Starts the run when none is active.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -403,8 +430,12 @@ export const register: Register = on => {
     const tool = String(e.tool)
     const input = e as unknown as Record<string, unknown>
     if (tool === 'Skill' && input.skill === 'pipeline') {
-      const keys = taskKeysIn(String(input.args ?? ''))
+      const args = String(input.args ?? '')
+      const keys = taskKeysIn(args)
       await start($, keys[0] ?? '', keys)
+      if (isChildArgs(args)) {
+        for (const key of keys) if (await adoptMother($, key)) break
+      }
     }
 
     const current = await read($, run)
@@ -472,6 +503,10 @@ export const register: Register = on => {
     if (isPr) {
       const url = prUrlIn(await bashOutput($, ran.result, ran.text))
       if (url !== '') await change($, r => ({ ...r, pr: url }))
+    }
+    if (isChildStart(tool, input)) {
+      const at = await $.clock.now()
+      await change($, r => (r.handedOffAt === undefined ? handOff(r, at) : r))
     }
     if (tool.endsWith('__teams_send_chat_message')) {
       const chat = typeof input.chatId === 'string' ? input.chatId : 'a chat'

@@ -37,6 +37,11 @@ export type Run = {
   extraRounds?: number
   // the pull request a gh pr create of this run printed (absent until one did)
   pr?: string
+  // a child's run: the mother session whose open status and grill gates it took (absent elsewhere)
+  mother?: string
+  // a mother's run: when it started a child session, which carries the QC gate and the PR from then
+  // on (absent until it did)
+  handedOffAt?: number
   // Phase 7 ends a run, and so does the person's /pipeline-gate end; the run stays, to say how it ended
   isDone: boolean
 }

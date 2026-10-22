@@ -2,35 +2,113 @@
 # SessionStart hook: the kb memory index and today's standup go into the session context.
 # stdout is context for Claude, not shown to the user. Silent when kb is not installed,
 # so teammates without kb see nothing. Never exits non-zero: a session must always start.
+#
+# Claude Code keeps at most 10,000 characters of a hook's output in context; past that the
+# model gets a path and the first 2,000 characters. So whatever the model must act on (the
+# compaction note, a stale schema, NO MEMORY) prints first, and a child session of the
+# pipeline (title starting "[child] ") gets the pinned rules and a standup count instead of
+# the whole index and standup, which come to about 31 KB on a busy project.
+#
+# The installed kb may predate --title, schema_stale or anything newer: each is tried, and a
+# kb that does not know it gets the old call, so no error ever reaches the context.
 set -u
 command -v kb >/dev/null 2>&1 || exit 0
 
 INPUT=$(cat)
-read -r SESSION_ID SOURCE < <(printf '%s' "$INPUT" | python3 -c \
-    'import json,sys; d=json.load(sys.stdin); print(d.get("session_id",""), d.get("source",""))')
+# One field per line, whitespace folded: a title holds spaces and could hold a newline.
+{ read -r SESSION_ID; read -r SOURCE; read -r TITLE; } < <(printf '%s' "$INPUT" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except ValueError:
+    d = {}
+for key in ("session_id", "source", "session_title"):
+    print(" ".join(str(d.get(key) or "").split()))
+' 2>/dev/null)
+SESSION_ID=${SESSION_ID:-}
+SOURCE=${SOURCE:-}
+TITLE=${TITLE:-}
 export KB_SESSION="$SESSION_ID"
 SCOPE="{{ project_name }}"
+CHILD=0
+case "$TITLE" in "[child] "*) CHILD=1 ;; esac
+
+if [ "$SOURCE" = "compact" ]; then
+    echo "kb: the context was just compacted. Before you continue, write the session note from the summary: kb session note \"<the decisions, what is done, the open threads>\"."
+fi
+
+# One field of `kb --json status`, '' when absent or unreadable.
+status_field() {
+    printf '%s' "$1" | python3 -c '
+import json, sys
+try:
+    v = json.load(sys.stdin).get(sys.argv[1])
+except (ValueError, AttributeError):
+    v = None
+print("" if v is None else json.dumps(v))
+' "$2" 2>/dev/null
+}
 
 status=$(kb --json status 2>/dev/null || true)
-reachable=$(printf '%s' "$status" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("bolt_reachable", False))' 2>/dev/null || echo False)
-if [ "$reachable" != "True" ]; then
+if [ "$(status_field "$status" bolt_reachable)" != "true" ]; then
     echo "kb: neo4j-kb.service was not answering at session start; starting it (up to start_timeout)."
     if ! kb service start >/dev/null 2>&1; then
         echo "kb: NO MEMORY. Neo4j did not come up. Tell the user before anything else; then: kb status; journalctl --user -u neo4j-kb.service -n 100"
         exit 0
     fi
+    status=$(kb --json status 2>/dev/null || true)
 fi
-upgrade=$(printf '%s' "$status" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("upgrade_pending", False))' 2>/dev/null || echo False)
-[ "$upgrade" = "True" ] && echo "kb: the unit runs an older neo4j than the installed package; run kb-setup."
+[ "$(status_field "$status" upgrade_pending)" = "true" ] && echo "kb: the unit runs an older neo4j than the installed package; run kb-setup."
+# schema_ok is null while Neo4j is unreachable (unknown, not stale); schema_stale is newer than some kb
+stale=$(status_field "$status" schema_stale)
+if [ "$(status_field "$status" schema_ok)" = "false" ] || { [ -n "$stale" ] && [ "$stale" != "[]" ]; }; then
+    echo "kb: schema stale or incomplete; run kb-setup"
+fi
 
 # Optional Odoo pull ([sources.odoo] enabled); prints only on failure, never fails.
 kb sync odoo 2>&1 | sed 's/^/kb: /'
 
 # The session skeleton; Claude writes the body at close (kb session close --body-file …).
-kb session open --scope "$SCOPE" --id "$SESSION_ID" --source "$SOURCE" 2>&1 | sed "s/^/kb: session /"
-kb index --scope "$SCOPE"
-echo
-kb today --scope "$SCOPE" --record-shown
+# The title goes in as a hint; a kb from before --title refuses the option with a usage
+# error (exit 2), and then the session opens without it.
+open_session() {
+    kb session open --scope "$SCOPE" --id "$SESSION_ID" --source "$SOURCE" "$@" 2>&1
+}
+opened=""
+rc=2
+if [ -n "$TITLE" ]; then
+    opened=$(open_session --title="$TITLE")
+    rc=$?
+fi
+[ "$rc" -eq 2 ] && opened=$(open_session)
+[ -n "$opened" ] && printf '%s\n' "$opened" | sed "s/^/kb: session /"
+
+if [ "$CHILD" = 1 ]; then
+    # A child session: its brief carries the task's context, so only the pinned rules
+    # (the header and the Pinned section of the index; the whole index when kb prints none)
+    # and a one-line count of the standup, which is not recorded as shown.
+    index=$(kb index --scope "$SCOPE" 2>/dev/null)
+    pinned=$(printf '%s\n' "$index" | awk 'NR == 1 { print; next } /^## Pinned$/ { on = 1 } on && /^## / && !/^## Pinned$/ { exit } on')
+    if printf '%s\n' "$pinned" | grep -qx '## Pinned'; then
+        printf '%s\n' "$pinned"
+    else
+        printf '%s\n' "$index"
+    fi
+    echo
+    kb today --scope "$SCOPE" --json 2>/dev/null | python3 -c '
+import json, sys
+try:
+    tasks = json.load(sys.stdin)["tasks"]
+except (ValueError, KeyError, TypeError):
+    sys.exit(0)
+loud = sum(1 for t in tasks if (t.get("level") or 0) >= 3)
+print(f"kb today: {len(tasks)} open tasks, {loud} loud; a child session leaves the list out (kb today prints it).")
+' 2>/dev/null
+else
+    kb index --scope "$SCOPE"
+    echo
+    kb today --scope "$SCOPE" --record-shown
+fi
 
 # Project-owned extras (not templated): entire fan-out check, stray files, anything local.
 # Contract: $1 = the SessionStart source, $2 = this session's id (also exported as
