@@ -981,11 +981,14 @@ from a green pipeline or a merged/awaiting-review PR.
 
 - **Pipeline succeeded + PR merged** → `kb done <WIP_ID> "PR <url> merged"`{% if tickets_mcp == 'odoo' %}, and close
 {% if task_pr_uri %}
-  the ticket per `odoo-tickets`: `write {"pr_uri": "<PR URL>"}` first, then
-  `write {"stage_id": <Delivered>}` (Delivered with empty `pr_uri` is
-  blocked by a prod automation){% else %}
-  the ticket per `odoo-tickets`: `write {"stage_id": <Delivered>}`, then a
-  `Progress` note with the PR URL{% endif %}{% endif %}
+  the ticket per `odoo-tickets`: revise its title and description to what the run
+  found (*Revise title and description before Delivered*; the user confirms the
+  draft), then `write {"pr_uri": "<PR URL>"}`, then `write {"stage_id": <Delivered>}`
+  (Delivered with empty `pr_uri` is blocked by a prod automation){% else %}
+  the ticket per `odoo-tickets`: revise its title and description to what the run
+  found (*Revise title and description before Delivered*; the user confirms the
+  draft), then `write {"stage_id": <Delivered>}`, then a `Progress` note with the
+  PR URL{% endif %}{% endif %}
 
 - **Pipeline succeeded + PR awaiting review** → `kb append <WIP_ID> "PR <url> awaiting review"`;
   the task stays open{% if tickets_mcp == 'odoo' %}, the ticket stays in Development and closes when the merged PR deploys{% endif %}.
@@ -1014,12 +1017,15 @@ Read `$STATE`, find the line with `[WIP_ID]` created in Phase 0 (it carries ` [o
 
 - **Pipeline succeeded + PR merged** → delete the line entirely, and close
 {% if task_pr_uri %}
-  the ticket per `odoo-tickets`: `write {"pr_uri": "<PR URL>"}` first, then
-  `write {"stage_id": <Delivered>}` (Delivered with empty `pr_uri` is
-  blocked by a prod automation)
+  the ticket per `odoo-tickets`: revise its title and description to what the run
+  found (*Revise title and description before Delivered*; the user confirms the
+  draft), then `write {"pr_uri": "<PR URL>"}`, then `write {"stage_id": <Delivered>}`
+  (Delivered with empty `pr_uri` is blocked by a prod automation)
 {% else %}
-  the ticket per `odoo-tickets`: `write {"stage_id": <Delivered>}`, then a
-  `Progress` note with the PR URL
+  the ticket per `odoo-tickets`: revise its title and description to what the run
+  found (*Revise title and description before Delivered*; the user confirms the
+  draft), then `write {"stage_id": <Delivered>}`, then a `Progress` note with the
+  PR URL
 {% endif %}
 - **Pipeline succeeded + PR awaiting review** → move from `## WIP`
   to `## Ready for review`, keep the `[odoo:<task_id>]` suffix:
