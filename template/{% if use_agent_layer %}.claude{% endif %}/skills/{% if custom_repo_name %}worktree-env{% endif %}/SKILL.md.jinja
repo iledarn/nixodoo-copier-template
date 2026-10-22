@@ -15,11 +15,11 @@ proxy and no main database, only the shared postgres cluster
 | | Session `<slug>` |
 |---|---|
 | Code | `.worktrees/<slug>` (branch off `origin/{{ odoo_version }}` in `src/{{ custom_repo_name }}`) |
-| Runtime | `.worktrees/_env/<slug>/{odoo.conf,data,port}` |
+| Runtime | `.worktrees/_env/<slug>/{odoo.conf,data,port,db,dump}` |
 | Service | `odoo{{ service_suffix }}-wt@<slug>.service` |
-| DB | `wt_<slug>` (own restore of the prod dump) |
+| DB | `wt_<slug>_<MMDDYY>`, written `<DB>` below: its own restore of the prod dump, `<MMDDYY>` the dump's day from its name (`odoo_2026-10-20-18-30-06.dump` -> `wt_kio_1234_cash_in_cogs_102026`), recorded in `.worktrees/_env/<slug>/db`. An env restored before dated names keeps `wt_<slug>` |
 | Env repo | `.worktrees/_envrepo/<slug>`, only with `--env-repo`: this project's own repo on branch `<slug>`, off origin's default branch |
-| HTTP | `http://wt_<slug>.localhost:<PORT>`, port auto-allocated in **{{ (odoo_major | int + 11) * 100 }}–{{ (odoo_major | int + 11) * 100 + 99 }}** (direct, no nginx) |
+| HTTP | `http://<DB>.localhost:<PORT>`, port auto-allocated in **{{ (odoo_major | int + 11) * 100 }}–{{ (odoo_major | int + 11) * 100 + 99 }}** (direct, no nginx) |
 
 ## Commands
 
@@ -27,7 +27,7 @@ Invoke by absolute path under `${{ project_dir_var }}/.claude/skills/worktree-en
 
 - **`wt-start.sh <slug> [--env-repo]`** — bring the env up: add the worktree off `origin/{{ odoo_version }}` as
   branch `<slug>`, allocate a free port, build the session addons farm, restore
-  `wt_<slug>` from the prod seed dump (+ `odoo neutralize`, an update of the custom
+  `<DB>` from the prod seed dump, the newest in `backup/` or the one `WT_DUMP=<path>` names (+ `odoo neutralize`, an update of the custom
   modules changed since the dump, dev fixups), start
   `odoo{{ service_suffix }}-wt@<slug>.service`.
   **Idempotent — re-run to refresh** (e.g. after adding a new module dir). Prints
@@ -49,7 +49,7 @@ Invoke by absolute path under `${{ project_dir_var }}/.claude/skills/worktree-en
   read-only or test-only run through.
 - **`wt-stop.sh <slug>`** — wait for a `wt-test.sh` run on the env (see the gotchas),
   stop the env's Odoo; if the worktree is clean, remove it,
-  drop `wt_<slug>`, delete the runtime dir (the branch stays on origin). A **dirty**
+  drop `<DB>`, delete the runtime dir (the branch stays on origin). A **dirty**
   worktree is kept (worktree + env + DB) and reported so no work is lost. The env-repo
   worktree counts the same: removed with the env when clean (its branch stays), and
   while it is dirty everything is kept. Exit 1 when
@@ -74,7 +74,7 @@ Invoke by absolute path under `${{ project_dir_var }}/.claude/skills/worktree-en
 
 **Slug** = kebab branch name, conventionally `<kio-key-lower>-<short-desc>`
 (e.g. `kio-1234-cash-in-cogs`). It is the git branch, the systemd instance, and (with
-`-`→`_`, prefixed `wt_`) the DB name.
+`-`→`_`, prefixed `wt_`, the dump's `_<MMDDYY>` after it) the DB name.
 
 Standalone: "spin up an env for {{ ticket_prefix }}-1234" → `wt-start.sh kio-1234-<desc>`, hand back
 the `URL`. "what envs are running" → `wt-list.sh`. "tear down kio-1234" →
@@ -94,6 +94,30 @@ Place a prod dump into `backup/` manually (any `*.dump` produced by `pg_dump -Fc
 the newest file is used. If `wt-start` reports no dump, ask the user to drop one in.
 {% endif %}
 
+**Check the dump's name before a restore: it is the only reliable date.** A dump named
+`<db>_YYYY-MM-DD-HH-MM-SS.dump` carries its day (the dump host's clock), and a new env's DB is named
+after it: `wt_<slug>_<MMDDYY>`. `wt-start` prints the dump in its `seed dump:` STATUS line
+and the name in its `DB:` line; check the date against the state you need (a record created
+or validated before or after that moment). `backup/` is shared: whoever refreshes it changes
+the dump every new env restores. For a specific dump, keep it outside `backup/` and name it
+with `WT_DUMP`:
+
+{% if backup_s3_bucket %}
+```bash
+aws s3 cp s3://{{ backup_s3_bucket }}/<db>_<YYYY-MM-DD-HH-MM-SS>.dump <a folder outside backup/>
+WT_DUMP=<that file> bash .claude/skills/worktree-env/scripts/wt-start.sh <slug>
+```
+{% else %}
+```bash
+WT_DUMP=<a dump outside backup/> bash .claude/skills/worktree-env/scripts/wt-start.sh <slug>
+```
+{% endif %}
+
+`WT_DUMP` and the date only matter when a DB is restored: a re-run on an env whose DB
+exists reuses it. `wt-start` records the dump it named the DB after
+(`.worktrees/_env/<slug>/dump`), so `wt-restore` takes that file even if `backup/` changes
+meanwhile.
+
 ## How it works / gotchas
 
 - **Why a per-session data_dir, not just `addons_path`:** Odoo's `initialize_sys_path`
@@ -102,8 +126,8 @@ the newest file is used. If `wt-start` reports no dump, ask the user to drop one
   `addons_path`. Each session therefore has its own data_dir whose farm IS the
   source of truth: custom modules → the worktree, OCA/CE → the shared pinned `src/`.
 - **Why sessions restore the dump themselves:** the seed flow targets a single
-  DB; `wt-restore.sh` restores the already-fetched dump into `wt_<slug>_restoring`,
-  neutralizes it and only then renames it to `wt_<slug>`, so parallel sessions stay
+  DB; `wt-restore.sh` restores the already-fetched dump into `<DB>_restoring`,
+  neutralizes it and only then renames it to `<DB>`, so parallel sessions stay
   independent and a running session service never sees the raw copy.
 - **The dump is raw prod** → `wt-restore.sh` runs Odoo's native neutralization
   (`odoo neutralize` — every installed module's `data/neutralize.sql`: outgoing mail
@@ -133,7 +157,7 @@ the newest file is used. If `wt-start` reports no dump, ask the user to drop one
   as base's deactivation of both ran before it existed (its crons never fire, sessions
   run `max_cron_threads = 0`, but such a mail server could send). The attachments the update writes move with the DB to its final name. The `STATUS:`
   line names the modules; with nothing changed there is no update. Any failure drops
-  the copy and fails the start, so `wt_<slug>` never exists half-updated: read
+  the copy and fails the start, so `<DB>` never exists half-updated: read
   `.worktrees/_env/<slug>/update.log`. A reused DB (re-run of `wt-start`) is not
   updated: `-u` it with `wt-test.sh`.
 - **What that update misses:** it sees only custom modules whose files changed since
@@ -155,12 +179,12 @@ the newest file is used. If `wt-start` reports no dump, ask the user to drop one
   only the prod layout (workers + evented port behind a proxy) cannot be reproduced
   here. The `queue_job` runner still starts in threaded mode against the session
   DB — jobs process normally and isolated. It calls the session back at
-  `http://wt_<slug>.localhost:<PORT>/queue_job/runjob` (the conf's `[queue_job]`
+  `http://<DB>.localhost:<PORT>/queue_job/runjob` (the conf's `[queue_job]`
   section): left to `http_interface` its host would be `::1`, an invalid URL host,
   and `^%d$` passes only a Host carrying the DB name. Channels: `root:3`; a
   sub-channel the conf does not name runs in its parent.
 - **The DB name is the subdomain:** sessions run `dbfilter = ^%d$`, so `<URL>` is
-  `http://wt_<slug>.localhost:<PORT>` and bare `localhost:<PORT>` lands on the DB
+  `http://<DB>.localhost:<PORT>` and bare `localhost:<PORT>` lands on the DB
   selector. The point is the browser: cookies are per host, not per port, so two
   sessions opened on bare `localhost` would share one `session_id` and log each
   other out. RPC with an explicit database ignores dbfilter and works on any host.
@@ -171,9 +195,9 @@ the newest file is used. If `wt-start` reports no dump, ask the user to drop one
   wkhtmltopdf resolves report assets against) to `<URL>`'s host.
 - **Several users side by side in one browser — add a label after the DB name:**
   `%d` is only the host's *first* label, while the `session_id` cookie is host-only
-  (keyed on the full host). So `http://wt_<slug>.<user>.localhost:<PORT>` opens the
-  same DB with its own login, next to `<URL>`: e.g. admin on `wt_<slug>.localhost`
-  and the reporting user on `wt_<slug>.<user>.localhost`. No conf change, no hosts
+  (keyed on the full host). So `http://<DB>.<user>.localhost:<PORT>` opens the
+  same DB with its own login, next to `<URL>`: e.g. admin on `<DB>.localhost`
+  and the reporting user on `<DB>.<user>.localhost`. No conf change, no hosts
   entry (`*.localhost` at any depth is loopback). This is the way to reproduce a
   "user X can't do Y" report in a browser with no containers. To log in as a real
   user, set a throwaway password on that user in the session DB (`odoo shell`:
@@ -193,10 +217,10 @@ the newest file is used. If `wt-start` reports no dump, ask the user to drop one
   WT_HOST_SUFFIX=<box>.<domain>     # default localhost
   ```
 
-  `<URL>` becomes `http://wt_<slug>.<WT_HOST_SUFFIX>:<PORT>` (also `report.url` and
+  `<URL>` becomes `http://<DB>.<WT_HOST_SUFFIX>:<PORT>` (also `report.url` and
   the `[queue_job]` host), so `WT_HOST_SUFFIX` needs a **wildcard** DNS record to the
   box (`*.<box>.<domain>` at any depth, as `*.localhost` is locally); the extra-label
-  trick then reads `wt_<slug>.<user>.<box>.<domain>`. `WT_HTTP_INTERFACE=0.0.0.0`
+  trick then reads `<DB>.<user>.<box>.<domain>`. `WT_HTTP_INTERFACE=0.0.0.0`
   serves the neutralized prod copy (`admin`/`admin`) to that LAN — an explicit
   opt-in, for a server whose main Odoo already is a LAN test copy. An interface other
   than loopback (`::1`, `localhost`, `127.0.0.0/8`) also gets `list_db = False` and a
@@ -223,7 +247,7 @@ the newest file is used. If `wt-start` reports no dump, ask the user to drop one
   session's service, decides whether the worktree is dirty and tears anything down; an
   env removed and re-created while it waited has its new lock waited for in turn. On
   every restore that does not reuse the DB, `wt-restore.sh` holds the lock while it swaps
-  the fresh copy in as `wt_<slug>` (filestore move, drop of the old DB, rename): neither
+  the fresh copy in as `<DB>` (filestore move, drop of the old DB, rename): neither
   drops a DB under a running test. A run still waiting when `wt-stop.sh` removed the env exits 1
   (`env <slug> was stopped while this run waited`) rather than run against nothing. A command of your
   own other than `wt-test.sh` takes its turn with
@@ -231,7 +255,7 @@ the newest file is used. If `wt-start` reports no dump, ask the user to drop one
   wrapper (wrapped anyway, it finds its caller holding the lock and runs under it).
 - **Reading or checking a session from Claude:** `{{ odoo_cmd }} shell -c <CONF> --no-http`
   with a script on stdin (as a given user: `env = env(user=env.ref('base.user_admin'))`
-  or `record.with_user(user)`), or `psql -d wt_<slug>` for plain reads. There is no
+  or `record.with_user(user)`), or `psql -d <DB>` for plain reads. There is no
   local Odoo MCP; the Odoo connector is production, as your own account.
 - **The env-repo worktree is for editing and committing, nothing else.** Its `src/`
   is empty (`src/*/` is gitignored) and it has no env of its own, so a tool run from its

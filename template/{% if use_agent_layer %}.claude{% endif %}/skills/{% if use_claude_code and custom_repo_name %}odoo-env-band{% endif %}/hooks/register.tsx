@@ -56,6 +56,10 @@ async function collect($: EngineInterface): Promise<EnvSnapshot> {
   const ports = await Promise.all(
     slugs.map(slug => $.fs.read(`${envRoot}/${slug}/port`).then(text => text.trim(), () => '?')),
   )
+  // wt-start records each env's database (wt_<slug>_<MMDDYY>, the day of its dump)
+  const dbs = await Promise.all(
+    slugs.map(slug => $.fs.read(`${envRoot}/${slug}/db`).then(text => text.trim() || wtDb(slug), () => wtDb(slug))),
+  )
   const wtUnit = (slug: string) => `odoo${SERVICE_SUFFIX}-wt@${slug}.service`
   const units = [...SERVICES.map(service => service.unit), ...slugs.map(wtUnit)]
   const systemctl = await $.process.run(['systemctl', '--user', 'is-active', ...units], { timeoutMs: 5000 })
@@ -67,7 +71,7 @@ async function collect($: EngineInterface): Promise<EnvSnapshot> {
       return {
         slug,
         port: ports[i] ?? '?',
-        db: wtDb(slug),
+        db: dbs[i] ?? wtDb(slug),
         isActive: active[wtUnit(slug)] === true,
         isMine,
         git: isMine ? await gitStatus($, `${project}/.worktrees/${slug}`) : null,

@@ -38,7 +38,12 @@ function engine(on: On, cwd: string, history: Use[] = []): void {
       { name: 'kio-2', kind: 'dir', size: 0, mtimeMs: 0, isLink: false },
     ],
   }))
-  on('fs.read', (_$, e) => ({ value: e.path.includes('kio-1') ? '2701\n' : '2702\n' }))
+  // kio-1 recorded its database at wt-start; kio-2's db file is empty, so it falls back to wt_<slug>
+  on('fs.read', (_$, e) => ({
+    value: e.path.endsWith('/db')
+      ? e.path.includes('kio-1') ? 'wt_kio_1_102026\n' : ''
+      : e.path.includes('kio-1') ? '2701\n' : '2702\n',
+  }))
   on('process.run', (_$, e) => {
     if (e.argv[0] === 'xdg-open') opened.push([...e.argv])
     const dir = String(e.argv[2] ?? '')
@@ -139,9 +144,9 @@ test('an edit in a worktree and git in addons, earlier in the transcript, show b
   const label = wt.indexOf('wt')
   expect(wt.slice(label, label + 3)).toEqual(['wt', ':2701 ● up', 'kio-1-feature'])
   // the session's address, its database the subdomain: a button that opens the browser on a remote surface
-  expect((await ui.find({ key: 'wt-open-kio-1' }))?.props.label).toBe('wt_kio_1.localhost:2701')
+  expect((await ui.find({ key: 'wt-open-kio-1' }))?.props.label).toBe('wt_kio_1_102026.localhost:2701')
   await ui.press({ key: 'wt-open-kio-1' })
-  expect(opened).toEqual([['xdg-open', 'http://wt_kio_1.localhost:2701/web']])
+  expect(opened).toEqual([['xdg-open', 'http://wt_kio_1_102026.localhost:2701/web']])
   // a bar between each two groups: pg, env, addons, the worktree, the other envs
   expect(await ui.findAll({ type: 'Text', text: '│' })).toHaveLength(4)
   expect(await ui.find({ text: '1 other wt env' })).toBeDefined()
@@ -150,8 +155,8 @@ test('an edit in a worktree and git in addons, earlier in the transcript, show b
   // and a link on the terminal
   const term = await $.ui.mount({ ...BAND, surface: 'terminal' })
   expect((await term.find({ type: 'Link' }))?.props).toMatchObject({
-    href: 'http://wt_kio_1.localhost:2701/web',
-    label: 'wt_kio_1.localhost:2701',
+    href: 'http://wt_kio_1_102026.localhost:2701/web',
+    label: 'wt_kio_1_102026.localhost:2701',
   })
   await term.unmount()
 })

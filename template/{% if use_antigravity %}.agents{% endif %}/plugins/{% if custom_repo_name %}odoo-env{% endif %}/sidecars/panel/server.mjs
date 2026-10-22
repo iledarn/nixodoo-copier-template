@@ -188,6 +188,7 @@ async function gitStatus(dir) {
   return run.exitCode === 0 ? parseGitStatus(run.stdout) : null;
 }
 
+// an env's database when its env dir records none (restored before wt-start recorded it): wt_<slug>
 function wtDb(slug) {
   return `wt_${slug.replace(/-/g, '_')}`;
 }
@@ -324,6 +325,14 @@ async function collectEnvSnapshot(wsRoot, cfg, touched) {
       return '?';
     }
   });
+  // wt-start records each env's database (wt_<slug>_<MMDDYY>, the day of its dump)
+  const dbs = slugs.map((slug) => {
+    try {
+      return readFileSync(join(envRoot, slug, 'db'), 'utf-8').trim() || wtDb(slug);
+    } catch {
+      return wtDb(slug);
+    }
+  });
 
   const pgUnit = `postgres${cfg.serviceSuffix}.service`;
   const wtUnit = (slug) => `odoo${cfg.serviceSuffix}-wt@${slug}.service`;
@@ -349,7 +358,7 @@ async function collectEnvSnapshot(wsRoot, cfg, touched) {
   ];
 
   const wts = slugs.map((slug, i) => {
-    const db = wtDb(slug);
+    const db = dbs[i];
     const port = ports[i] || '?';
     const address = `${db}.localhost:${port}`;
     return {
