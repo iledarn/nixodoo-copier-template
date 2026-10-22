@@ -8,6 +8,8 @@
 #   runtime   .worktrees/_env/<slug>/       (odoo.conf, data_dir, port file)
 #   DB        wt_<slug>                      (independent restore of the prod dump)
 #   service   odoo{{ service_suffix }}-wt@<slug>.service         (own Odoo on its own port)
+#   env repo  .worktrees/_envrepo/<slug>/   (wt-start --env-repo only: this project's own
+#                                             repo on branch <slug>, for the task's scripts/ADRs)
 # Nothing is shared between sessions except the read-only seed dump, the
 # pinned OCA/CE module sources and the postgres cluster. There is no main env:
 # no main Odoo, no reverse proxy, no main database; every pipeline run works here.
@@ -24,6 +26,7 @@ MAIN_FARM="$PROJ/.local/share/Odoo/addons/{{ odoo_version }}"   # main symlink f
 
 WT_ROOT="$PROJ/.worktrees"                         # per-run git worktrees (gitignored)
 WT_ENVROOT="$WT_ROOT/_env"                         # per-session runtime (conf/data/port)
+WT_ENVREPO_ROOT="$WT_ROOT/_envrepo"                 # per-run worktrees of the project repo itself
 BACKUP_DIR="$PROJ/backup"                           # prod seed dump lives here
 LOCKFILE="$WT_ROOT/.wt.lock"                        # serializes port alloc + git worktree add
 
@@ -59,6 +62,7 @@ WT_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 db_name_for() { echo "wt_${1//-/_}"; }                                   # slug -> safe pg identifier
 session_host() { echo "$1.$WT_HOST_SUFFIX"; }                          # DB -> host whose first label is the DB (dbfilter ^%d$)
 db_exists()   { $PSQL -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$1'" | grep -q 1; }
+tree_dirty()  { [ -n "$(git -C "$1" status --porcelain 2>/dev/null)" ]; }  # uncommitted or untracked files in a worktree
 
 # A session running in a Claude worktree of this project (<project>/.claude/worktrees/<name>,
 # where the desktop app and EnterWorktree put them) cannot edit an env it brings up: the

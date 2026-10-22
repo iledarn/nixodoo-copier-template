@@ -135,7 +135,12 @@ and the user merges - also for a lone file, and especially once it has touched
 prod: the PR is the review record of what ran there. Commit messages:
 `[ADD] scripts: <TICKET> <what it does>` for the script, `[DOC] scripts:
 <TICKET> <which run>` for a run-record update. Once the script PR is merged, a
-later run-record update goes on its own small PR (`<TICKET>-runs`).
+later run-record update goes on its own small PR (`<TICKET>-runs`). In a
+worktree env the branch is the env's own: `wt-start.sh <slug> --env-repo`
+checks this repo out at `.worktrees/_envrepo/<slug>` on branch `<slug>`
+(worktree-env skill). Write, commit and push the script there, never by
+switching the base checkout's branch under other sessions; the dry run reads
+it from there (`< .worktrees/_envrepo/<slug>/scripts/<TICKET>/<name>.py`).
 
 **Running the merged file on prod.** Run what was reviewed: extract it from the
 merged ref (`git fetch -q origin && git show origin/main:scripts/<TICKET>/<name>.py

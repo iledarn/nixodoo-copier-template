@@ -155,7 +155,8 @@ scripts and gotchas live in the `worktree-env` skill — read it.** What the pip
 needs from it:
 
 - **Phase 1** runs `wt-start.sh <slug>` and captures its output as `<WT>` (worktree
-  path), `<CONF>` (session `odoo.conf`), `<URL>` (browser URL), `<DB>`, `<PORT>`.
+  path), `<CONF>` (session `odoo.conf`), `<URL>` (browser URL), `<DB>`, `<PORT>`, and
+  with `--env-repo` `<ENVREPO>` (this project's own repo on branch `<slug>`).
   Re-running `wt-start.sh <slug>` refreshes the env (idempotent).
 - **Phases 2–6** edit/test/PR using those: `git -C <WT> …`, `{{ odoo_cmd }} -c <CONF> …`,
   browser `<URL>`. All code/git happens in `<WT>`, never in `src/{{ custom_repo_name }}`.
@@ -599,7 +600,11 @@ Before spawning any subagent:
    `odoo{{ service_suffix }}-wt@<slug>.service`. **Capture the printed `WORKTREE:`/`CONF:`/`URL:`/`DB:`/
    `PORT:` as `<WT>`/`<CONF>`/`<URL>`/`<DB>`/`<PORT>`** — every later phase uses them.
    All code/git for this run happens in `<WT>`; the user's `src/{{ custom_repo_name }}` is
-   never touched. (Prereq: a seed dump in `backup/` — if `wt-start`
+   never touched. When the task also changes this project's own repo (a ticket script
+   under `scripts/<TICKET>/`, an ADR, a skill), add `--env-repo` and capture `ENVREPO:` as
+   `<ENVREPO>`: those files are written, committed and pushed there, on branch `<slug>`,
+   never in the base checkout, whose branch belongs to every session. A later re-run with
+   the flag adds it to a running env. (Prereq: a seed dump in `backup/` — if `wt-start`
    reports none, ask the user to {% if backup_s3_bucket %}run `nix run .#download-backup` once{% else %}drop a prod dump into `backup/`{% endif %} first.)
 
 Report: "Starting pipeline for: <TASK-KEY> — <task summary>". Add the grill-gate outcome: "Grill gate: Alignment Summary confirmed (N questions, M assumptions)" or "Grill gate: skipped (mechanical task)".{% if tickets_mcp == 'odoo' %} {% if task_software_fields %}If clarifying questions were asked, add "N clarifying Q&A captured to the Technical Solution tab." If Technical Solution was enriched, add "Technical Solution auto-generated and written to the task. Please review." If Test Cases were generated, add "N test cases written to Test Cases tab."{% else %}If clarifying questions were asked, add "N clarifying Q&A posted as Design Decision notes." If Technical Solution was enriched, add "Technical Solution auto-generated and posted as a note. Please review." If Test Cases were generated, add "N test cases posted as a Test Cases note."{% endif %}{% endif %}
@@ -1070,10 +1075,11 @@ Collect the new IDs assigned — cite them in the journal.
 Run `ALL_DECISIONS` (and the grill's Alignment Summary, if Phase 1 grilled)
 through the `domain-modeling` three-part test: hard to reverse + surprising
 without context + a real trade-off. Each qualifying decision → write
-`${{ project_dir_var }}/docs/adr/NNNN-<slug>.md` per the skill's format
+`<ENVREPO>/docs/adr/NNNN-<slug>.md` per the skill's format
 (task key inside). Most runs produce zero ADRs — that is the intended shape.
 Also flush any glossary terms that resolved during the run but were not yet
-written to `${{ project_dir_var }}/CONTEXT.md`.
+written to `<ENVREPO>/CONTEXT.md`. A run with something to write here and no
+`<ENVREPO>` yet gets one first: `wt-start.sh <slug> --env-repo` (the DB is reused).
 {% if use_kb %}
 
 A decision that misses the ADR test but should outlive the chat → `kb add "<decision>" --kind decision --summary "<one line>" --link RELATED:<WIP_ID>`.

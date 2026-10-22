@@ -18,19 +18,29 @@ proxy and no main database, only the shared postgres cluster
 | Runtime | `.worktrees/_env/<slug>/{odoo.conf,data,port}` |
 | Service | `odoo{{ service_suffix }}-wt@<slug>.service` |
 | DB | `wt_<slug>` (own restore of the prod dump) |
+| Env repo | `.worktrees/_envrepo/<slug>`, only with `--env-repo`: this project's own repo on branch `<slug>`, off origin's default branch |
 | HTTP | `http://wt_<slug>.localhost:<PORT>`, port auto-allocated in **{{ (odoo_major | int + 11) * 100 }}–{{ (odoo_major | int + 11) * 100 + 99 }}** (direct, no nginx) |
 
 ## Commands
 
 Invoke by absolute path under `${{ project_dir_var }}/.claude/skills/worktree-env/scripts/`:
 
-- **`wt-start.sh <slug>`** — bring the env up: add the worktree off `origin/{{ odoo_version }}` as
+- **`wt-start.sh <slug> [--env-repo]`** — bring the env up: add the worktree off `origin/{{ odoo_version }}` as
   branch `<slug>`, allocate a free port, build the session addons farm, restore
   `wt_<slug>` from the prod seed dump (+ `odoo neutralize`, an update of the custom
   modules changed since the dump, dev fixups), start
   `odoo{{ service_suffix }}-wt@<slug>.service`.
   **Idempotent — re-run to refresh** (e.g. after adding a new module dir). Prints
   `WORKTREE:` / `BRANCH:` / `URL:` / `CONF:` / `DB:` / `PORT:` — capture these.
+  **`--env-repo`** also checks out this project's own repo at `.worktrees/_envrepo/<slug>`
+  on branch `<slug>` (an existing local branch of that name as it is, else a new one off
+  origin's default branch, freshly fetched), for what the task changes outside the addons:
+  a ticket script under `scripts/<TICKET>/`, an ADR, a skill. Commit and push from there, and
+  open that PR from there: the base checkout stays on its branch for every other session.
+  Use it when the task needs it; a later run without the flag keeps the one that exists, and
+  every run prints `ENVREPO:` while it does. The flag needs the project to be a git clone
+  with an `origin` (exit 1 before anything is made); an unknown option or a second slug is
+  refused with exit 2.
   Refuses to run from a Claude worktree of the project (`.claude/worktrees/<name>`,
   exit 4, before anything is created): the desktop app's worktree guard refuses
   Edit/Write in the base checkout, which is where `.worktrees/<slug>` lives, so the
@@ -40,10 +50,13 @@ Invoke by absolute path under `${{ project_dir_var }}/.claude/skills/worktree-en
 - **`wt-stop.sh <slug>`** — wait for a `wt-test.sh` run on the env (see the gotchas),
   stop the env's Odoo; if the worktree is clean, remove it,
   drop `wt_<slug>`, delete the runtime dir (the branch stays on origin). A **dirty**
-  worktree is kept (worktree + env + DB) and reported so no work is lost. Exit 1 when
+  worktree is kept (worktree + env + DB) and reported so no work is lost. The env-repo
+  worktree counts the same: removed with the env when clean (its branch stays), and
+  while it is dirty everything is kept. Exit 1 when
   it cannot take the env's test lock (`test.lock` not a writable file): env and
   service left as they are.
-- **`wt-list.sh`** — table of all active envs (slug / port / DB / service / dirty).
+- **`wt-list.sh`** — table of all active envs: slug / port / DB / service, then the
+  addons worktree and the env-repo worktree, each `clean`, `dirty` or `none`.
 - `wt-bootstrap.sh` — one-time, light: installs the `odoo{{ service_suffix }}-wt@.service` template unit
   and checks the seed dump is present. **No DB work.**
   `wt-start.sh` calls it automatically.
@@ -220,6 +233,12 @@ the newest file is used. If `wt-start` reports no dump, ask the user to drop one
   with a script on stdin (as a given user: `env = env(user=env.ref('base.user_admin'))`
   or `record.with_user(user)`), or `psql -d wt_<slug>` for plain reads. There is no
   local Odoo MCP; the Odoo connector is production, as your own account.
+- **The env-repo worktree is for editing and committing, nothing else.** Its `src/`
+  is empty (`src/*/` is gitignored) and it has no env of its own, so a tool run from its
+  own copy of `.claude/skills/` (find-code's index, `dbfields.py`, the `wt-*.sh`) sees no
+  code or the wrong project. Run tools from the base checkout
+  (`${{ project_dir_var }}/.claude/skills/...`); `dbfields.py` and the env band read a cwd
+  in `.worktrees/_envrepo/<slug>/` as the env `<slug>`.
 - Cosmetic: every session shows Odoo's native neutralization banner (same on all) —
   tell sessions apart by the subdomain in `<URL>`.
 - Disk: each session DB is a full restore (a few GB); attachments are not seeded
@@ -228,6 +247,7 @@ the newest file is used. If `wt-start` reports no dump, ask the user to drop one
 
 ## Files
 
-`.worktrees/<slug>/` (worktree) and `.worktrees/_env/<slug>/` (conf, data_dir, port)
-are gitignored in the parent repo. The branch lives in the nested addons repo
-(`src/{{ custom_repo_name }}`, remote `{{ module_prefix }}-dev/{{ custom_repo_name }}`).
+`.worktrees/<slug>/` (worktree), `.worktrees/_env/<slug>/` (conf, data_dir, port) and
+`.worktrees/_envrepo/<slug>/` (env-repo worktree) are gitignored in the parent repo. The
+addons branch lives in the nested addons repo (`src/{{ custom_repo_name }}`, remote
+`{{ module_prefix }}-dev/{{ custom_repo_name }}`), the env-repo branch in the parent repo itself.

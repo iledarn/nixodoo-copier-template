@@ -79,6 +79,8 @@ describe('parsers', () => {
   test('cwd, systemctl and the db name', async () => {
     expect(worktreeSlug('/p/.worktrees/kio-1/models', PROJECT)).toBe('kio-1')
     expect(worktreeSlug('/p/.worktrees/_env/kio-1', PROJECT)).toBe(null)
+    expect(worktreeSlug('/p/.worktrees/_envrepo/kio-1/scripts', PROJECT)).toBe('kio-1')
+    expect(worktreeSlug('/p/.worktrees/_envrepo', PROJECT)).toBe(null)
     expect(parseActive('active\ninactive\n', ['a', 'b'])).toEqual({ a: true, b: false })
     expect(wtDb('kio-1826-chain')).toBe('wt_kio_1826_chain')
   })

@@ -15,6 +15,8 @@ The Claude-worktree cases run the rendered wt-start.sh up to its bootstrap step,
 the exposure cases all of it with its helper scripts, git and psql stubbed.
 The wt-restore.sh cases run it with psql, pg_restore and odoo stubbed on a
 worktree with a scripted git history. The wt-stop.sh cases share wt-test.sh's stubs.
+The --env-repo cases run wt-start.sh, wt-stop.sh and wt-list.sh on a project that is
+a real git repo, git stubbed for the addons repo only.
 CI runs this file once per push (the wt-scripts job); it needs jinja2, bash, flock and git.
 """
 
@@ -648,6 +650,68 @@ def a_caller_holding_the_env_lock_does_not_deadlock_wt_stop_or_the_restore():
         assert run.returncode == 0 and "running under its lock" in out and "db-ready" in out, out
 
 
+def env_repo_stop_project(root):
+    """stop_project in a project that is a git repo with an env-repo worktree for slug x."""
+    cmd, env, events = stop_project(root)
+    git(root, "init", "-qb", "main")
+    (root / "README.md").write_text("a\n")
+    git(root, "add", "README.md")
+    git(root, "commit", "-qm", "init")
+    git(root, "worktree", "add", "-qb", "x", str(root / ".worktrees/_envrepo/x"))
+    return cmd, env, events
+
+
+@case
+def wt_stop_removes_a_clean_env_repo_worktree_and_keeps_its_branch():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        cmd, env, _events = env_repo_stop_project(root)
+        tree = root / ".worktrees/_envrepo/x"
+        git(tree, "commit", "-q", "--allow-empty", "-m", "the task's script")
+        run = subprocess.run(cmd, capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL, timeout=60)
+        out = run.stdout + run.stderr
+        assert run.returncode == 0 and "STATUS: removed (x) — worktree + env-repo worktree" in out, out
+        assert not tree.exists() and not (root / ".worktrees/_env/x").exists(), out
+        log = subprocess.run(["git", "-C", str(root), "log", "-1", "--format=%s", "x"],
+                             capture_output=True, text=True, check=True).stdout.strip()
+        assert log == "the task's script", "the branch keeps its commits"
+
+
+@case
+def wt_stop_keeps_everything_while_the_env_repo_worktree_is_dirty():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        cmd, env, events = env_repo_stop_project(root)
+        tree = root / ".worktrees/_envrepo/x"
+        (tree / "scripts").mkdir()
+        (tree / "scripts/fix.py").write_text("pass\n")
+        run = subprocess.run(cmd, capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL, timeout=60)
+        out = run.stdout + run.stderr
+        assert run.returncode == 0 and f"DIRTY-kept ({tree})" in out, out
+        assert (tree / "scripts/fix.py").exists() and (root / ".worktrees/_env/x/odoo.conf").exists(), out
+        assert "DROP DATABASE" not in (events.read_text() if events.exists() else ""), out
+
+
+@case
+def wt_list_shows_the_env_repo_worktree_state():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        _cmd, env, _events = env_repo_stop_project(root)
+        (root / "bin/systemctl").write_text("#!/usr/bin/env bash\necho inactive\nexit 3\n")  # as systemctl does
+        (root / "scripts/wt-list.sh").write_text(render_script(SRC.with_name("wt-list.sh.jinja")))
+        rows = {}
+        for when in ("clean", "dirty"):
+            if when == "dirty":
+                (root / ".worktrees/_envrepo/x/draft.py").write_text("wip\n")
+            run = subprocess.run(["bash", str(root / "scripts/wt-list.sh")], capture_output=True, text=True,
+                                 env=env, stdin=subprocess.DEVNULL, timeout=60)
+            assert run.returncode == 0, run.stdout + run.stderr
+            rows[when] = [line.split() for line in run.stdout.splitlines()]
+        assert rows["clean"][0][-2:] == ["WORKTREE", "ENVREPO"], rows
+        assert rows["clean"][1] == ["x", "?", "wt_x", "inactive", "none", "clean"], rows
+        assert rows["dirty"][1][-1] == "dirty", rows
+
+
 @case
 def an_update_of_a_module_the_db_lacks_stops_before_odoo():
     rc, out, psql, odoo = run_wt_test(["-u", "acme_new", "--test-enable", "--test-tags", "/acme_new"],
@@ -815,10 +879,11 @@ def the_override_lets_a_claude_worktree_through():
     assert (rc, out.strip()) == (7, "BOOTSTRAP"), (rc, out)
 
 
-def run_wt_start(root, interface=None):
-    """Run the rendered wt-start.sh for slug `x` in project `root` (made on the first call) with
+def run_wt_start(root, interface=None, argv=("x",)):
+    """Run the rendered wt-start.sh with `argv` (slug `x`) in project `root` (made on the first call) with
     WT_HTTP_INTERFACE=`interface` in .env when given; its helper scripts are no-ops, the worktree
-    and port exist, git, psql and systemctl are stubs. Returns (exit code, stdout+stderr, conf path)."""
+    and port exist, psql and systemctl are stubs, and so is git for the addons repo (the project's
+    own repo gets the real one). Returns (exit code, stdout+stderr, conf path)."""
     scripts, bin_dir, env_dir = root / "scripts", root / "bin", root / ".worktrees/_env/x"
     if not scripts.exists():
         for d in (scripts, bin_dir, env_dir, root / "backup"):
@@ -829,13 +894,14 @@ def run_wt_start(root, interface=None):
             (scripts / src.name.removesuffix(".jinja")).write_text(render_script(src))
         for name in ("wt-bootstrap.sh", "wt-link.sh", "wt-restore.sh"):
             (scripts / name).write_text("exit 0\n")
-        stubs = {"git": f'case "$*" in *"worktree list"*) echo "worktree {root}/.worktrees/x" ;; esac\n',
+        stubs = {"git": f'case "$*" in "-C {root}/src/acme-addons "*) ;; *) exec {shlex.quote(shutil.which("git"))} "$@" ;; esac\n'
+                        f'case "$*" in *"worktree list"*) echo "worktree {root}/.worktrees/x" ;; esac\n',
                  "psql": "", "systemctl": ""}
         for name, body in stubs.items():
             (bin_dir / name).write_text(f"#!/usr/bin/env bash\n{body}")
             (bin_dir / name).chmod(0o755)
     (root / ".env").write_text(f"WT_HTTP_INTERFACE={interface}\n" if interface else "")
-    proc = subprocess.run(["bash", str(scripts / "wt-start.sh"), "x"], cwd=root, capture_output=True, text=True,
+    proc = subprocess.run(["bash", str(scripts / "wt-start.sh"), *argv], cwd=root, capture_output=True, text=True,
                           stdin=subprocess.DEVNULL,
                           env={**os.environ, "HOME": str(root), "WT_TEST_PROJECT_DIR": str(root),
                                "PATH": f"{bin_dir}:{os.environ['PATH']}"})
@@ -898,6 +964,89 @@ def a_failed_conf_write_keeps_the_previous_conf():
         rc, out, conf_path = run_wt_start(root, "0.0.0.0")
         assert rc != 0 and conf_path.read_text() == before, (rc, out)
         assert sorted(path.name for path in conf_path.parent.iterdir()) == ["data", "odoo.conf", "port"], out
+
+
+def env_repo_project(tmp):
+    """A project cloned from a bare origin whose default branch is main (README.md "a").
+    Returns (project root, origin, a second clone to push from)."""
+    origin, seed, root = tmp / "origin.git", tmp / "seed", tmp / "proj"
+    git(tmp, "init", "-q", "--bare", "-b", "main", str(origin))
+    git(tmp, "clone", "-q", str(origin), str(seed))
+    git(seed, "checkout", "-qb", "main")
+    commit(seed, "2026-10-01", {"README.md": "a\n"})
+    git(seed, "push", "-q", "origin", "main")
+    git(tmp, "clone", "-q", str(origin), str(root))
+    return root, origin, seed
+
+
+def head_of(tree):
+    return subprocess.run(["git", "-C", str(tree), "rev-parse", "--abbrev-ref", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+
+
+@case
+def env_repo_flag_checks_out_the_project_repo_on_the_slug_off_origin():
+    with tempfile.TemporaryDirectory() as tmp:
+        root, _origin, seed = env_repo_project(pathlib.Path(tmp))
+        commit(seed, "2026-10-02", {"README.md": "b\n"})   # origin moved on since the clone
+        git(seed, "push", "-q", "origin", "main")
+        commit(root, "2026-10-03", {"local.txt": "x\n"})   # a local main commit is not the base
+        rc, out, _conf = run_wt_start(root, argv=("x", "--env-repo"))
+        tree = root / ".worktrees/_envrepo/x"
+        assert rc == 0 and f"ENVREPO: {tree}" in out.splitlines(), out
+        assert head_of(tree) == "x" and (tree / "README.md").read_text() == "b\n", out
+        assert not (tree / "local.txt").exists(), "branched off local main, not origin's"
+
+
+@case
+def an_env_repo_worktree_is_kept_and_reported_by_every_later_run():
+    with tempfile.TemporaryDirectory() as tmp:
+        root, _origin, _seed = env_repo_project(pathlib.Path(tmp))
+        tree = root / ".worktrees/_envrepo/x"
+        rc, out, _conf = run_wt_start(root, argv=("--env-repo", "x"))
+        assert rc == 0 and tree.is_dir(), out
+        (tree / "draft.py").write_text("wip\n")
+        for argv in (("x", "--env-repo"), ("x",)):
+            rc, out, _conf = run_wt_start(root, argv=argv)
+            assert rc == 0 and f"ENVREPO: {tree}" in out.splitlines(), (argv, out)
+            assert (tree / "draft.py").read_text() == "wip\n", argv
+
+
+@case
+def an_env_repo_branch_that_exists_is_checked_out_with_its_commits():
+    with tempfile.TemporaryDirectory() as tmp:
+        root, _origin, _seed = env_repo_project(pathlib.Path(tmp))
+        git(root, "checkout", "-qb", "x")
+        commit(root, "2026-10-02", {"scripts/KIO-1/fix.py": "pass\n"})
+        git(root, "checkout", "-q", "main")
+        rc, out, _conf = run_wt_start(root, argv=("x", "--env-repo"))
+        tree = root / ".worktrees/_envrepo/x"
+        assert rc == 0 and head_of(tree) == "x" and (tree / "scripts/KIO-1/fix.py").exists(), out
+
+
+@case
+def without_the_flag_there_is_no_env_repo_worktree():
+    with tempfile.TemporaryDirectory() as tmp:
+        root, _origin, _seed = env_repo_project(pathlib.Path(tmp))
+        rc, out, _conf = run_wt_start(root)
+        assert rc == 0 and "ENVREPO" not in out and not (root / ".worktrees/_envrepo").exists(), out
+
+
+@case
+def the_flag_on_a_project_that_is_no_git_clone_stops_before_anything_is_made():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        rc, out, conf_path = run_wt_start(root, argv=("x", "--env-repo"))
+        assert rc == 1 and "--env-repo needs" in out and not conf_path.exists(), (rc, out)
+
+
+@case
+def an_unknown_option_or_a_second_slug_is_refused_before_anything_is_made():
+    for argv in (("x", "--envrepo"), ("x", "y"), ()):
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, conf_path = run_wt_start(pathlib.Path(tmp), argv=argv)
+            assert rc == 2 and "usage: wt-start.sh <slug> [--env-repo]" in out, (argv, rc, out)
+            assert not conf_path.exists(), argv
 
 
 RESTORE_SRC = SRC.with_name("wt-restore.sh.jinja")
