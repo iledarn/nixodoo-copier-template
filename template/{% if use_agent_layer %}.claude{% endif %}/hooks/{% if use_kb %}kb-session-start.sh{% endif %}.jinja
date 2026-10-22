@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # SessionStart hook: the kb memory index and today's standup go into the session context.
-# stdout is context for Claude, not shown to the user. Silent when kb is not installed,
-# so teammates without kb see nothing. Never exits non-zero: a session must always start.
+# stdout is context for Claude, not shown to the user. Without kb on PATH, or with this
+# checkout not registered as its kb scope, it says so in one line that names the fix
+# (nix run .#kb-setup). Never exits non-zero: a session must always start.
 #
 # Claude Code keeps at most 10,000 characters of a hook's output in context; past that the
 # model gets a path and the first 2,000 characters. So whatever the model must act on (the
@@ -12,7 +13,10 @@
 # The installed kb may predate --title, schema_stale or anything newer: each is tried, and a
 # kb that does not know it gets the old call, so no error ever reaches the context.
 set -u
-command -v kb >/dev/null 2>&1 || exit 0
+if ! command -v kb >/dev/null 2>&1; then
+    echo "kb: kb is not installed, so this session has no project memory. To set it up: nix run .#kb-setup"
+    exit 0
+fi
 
 INPUT=$(cat)
 # One field per line, whitespace folded: a title holds spaces and could hold a newline.
@@ -35,6 +39,16 @@ case "$TITLE" in "[child] "*) CHILD=1 ;; esac
 
 if [ "$SOURCE" = "compact" ]; then
     echo "kb: the context was just compacted. Before you continue, write the session note from the summary: kb session note \"<the decisions, what is done, the open threads>\"."
+fi
+
+# This checkout must be the kb scope "$SCOPE", or records made here land in another scope and
+# .kb/tags.toml is never read. `kb scope which` exits 3 for a path in no scope; a kb from
+# before `kb scope` fails another way, and then nothing is said.
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+registered=$(kb scope which "$ROOT" 2>/dev/null)
+rc=$?
+if [ "$rc" -eq 3 ] || { [ "$rc" -eq 0 ] && [ "$registered" != "$SCOPE" ]; }; then
+    echo "kb: this checkout is not registered as the kb scope $SCOPE, so records made here land elsewhere and .kb/tags.toml is not read. To fix: nix run .#kb-setup"
 fi
 
 # One field of `kb --json status`, '' when absent or unreadable.
