@@ -596,7 +596,7 @@ Before spawning any subagent:
    bash "${{ project_dir_var }}/.claude/skills/worktree-env/scripts/wt-start.sh" <slug>
    ```
    It adds a worktree off `origin/{{ odoo_version }}` as branch `<slug>`, allocates a free port,
-   builds the session farm, restores `wt_<slug>` from the prod seed dump, and starts
+   builds the session farm, restores `wt_<slug>_<MMDDYY>` from the prod seed dump, and starts
    `odoo{{ service_suffix }}-wt@<slug>.service`. **Capture the printed `WORKTREE:`/`CONF:`/`URL:`/`DB:`/
    `PORT:` as `<WT>`/`<CONF>`/`<URL>`/`<DB>`/`<PORT>`** — every later phase uses them.
    All code/git for this run happens in `<WT>`; the user's `src/{{ custom_repo_name }}` is

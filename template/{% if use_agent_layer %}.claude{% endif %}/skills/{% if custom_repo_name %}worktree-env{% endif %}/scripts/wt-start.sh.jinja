@@ -3,7 +3,9 @@
 # parallel sessions at once: the worktree-add + port allocation are serialized
 # with flock; the slow restore runs outside the lock so sessions overlap.
 #
-# Usage: wt-start.sh <slug> [--env-repo]   # <slug> = branch name, e.g. kio-1234-cash-in-cogs
+# Usage: [WT_DUMP=<dump>] wt-start.sh <slug> [--env-repo]   # <slug> = branch name, e.g. kio-1234-cash-in-cogs
+#   WT_DUMP     restore that dump instead of the newest in backup/ (a new env's DB only;
+#               it is named wt_<slug>_<MMDDYY> from the dump's name either way)
 #   --env-repo  also check out the project's own repo at .worktrees/_envrepo/<slug> on branch
 #               <slug> (off origin's default branch), for the task's ticket scripts, ADRs and
 #               skill edits. Later runs, with the flag or without, keep the one that exists.
@@ -22,7 +24,6 @@ for arg in "$@"; do
     esac
 done
 [ -n "$SLUG" ] || { echo "$USAGE" >&2; exit 2; }
-DB="$(db_name_for "$SLUG")"
 WT_PATH="$WT_ROOT/$SLUG"
 ENVREPO_PATH="$WT_ENVREPO_ROOT/$SLUG"
 refuse_in_claude_worktree "$WT_PATH"
@@ -33,13 +34,24 @@ ENV_DIR="$WT_ENVROOT/$SLUG"
 DATA_DIR="$ENV_DIR/data"
 FARM="$DATA_DIR/addons/{{ odoo_version }}"
 CONF="$ENV_DIR/odoo.conf"
-HOST="$(session_host "$DB")"
 
 bash "$WT_SCRIPT_DIR/wt-bootstrap.sh"
-ls "$BACKUP_DIR"/*.dump >/dev/null 2>&1 || {
+[ -z "${WT_DUMP:-}" ] || [ -f "$WT_DUMP" ] || { echo "ERROR: WT_DUMP=$WT_DUMP: no such dump" >&2; exit 1; }
+[ -n "${WT_DUMP:-}" ] || ls "$BACKUP_DIR"/*.dump >/dev/null 2>&1 || {
     echo "ERROR: no prod seed dump in $BACKUP_DIR — {% if backup_s3_bucket %}run \`nix run .#download-backup\`{% else %}put a prod dump into backup/{% endif %}, then retry" >&2; exit 1; }
 
 mkdir -p "$ENV_DIR" "$DATA_DIR/sessions" "$DATA_DIR/filestore"
+
+# A DB this env already has (the recorded name, or an older env's undated wt_<slug>) is kept.
+# A new one is named after its dump, and the dump is recorded for wt-restore to take.
+DB="$(db_name_for "$SLUG")"
+if ! db_exists "$DB"; then
+    DUMP="$(seed_dump)"
+    DB="$(dated_db_name "$SLUG" "$DUMP")"
+    echo "$DUMP" > "$ENV_DIR/dump"
+fi
+echo "$DB" > "$ENV_DIR/db"
+HOST="$(session_host "$DB")"
 
 # --- critical section: worktree add + port allocation (serialized) ---
 exec 9>"$LOCKFILE"

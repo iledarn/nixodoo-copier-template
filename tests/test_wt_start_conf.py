@@ -879,7 +879,7 @@ def the_override_lets_a_claude_worktree_through():
     assert (rc, out.strip()) == (7, "BOOTSTRAP"), (rc, out)
 
 
-def run_wt_start(root, interface=None, argv=("x",)):
+def run_wt_start(root, interface=None, argv=("x",), extra_env=None):
     """Run the rendered wt-start.sh with `argv` (slug `x`) in project `root` (made on the first call) with
     WT_HTTP_INTERFACE=`interface` in .env when given; its helper scripts are no-ops, the worktree
     and port exist, psql and systemctl are stubs, and so is git for the addons repo (the project's
@@ -904,7 +904,7 @@ def run_wt_start(root, interface=None, argv=("x",)):
     proc = subprocess.run(["bash", str(scripts / "wt-start.sh"), *argv], cwd=root, capture_output=True, text=True,
                           stdin=subprocess.DEVNULL,
                           env={**os.environ, "HOME": str(root), "WT_TEST_PROJECT_DIR": str(root),
-                               "PATH": f"{bin_dir}:{os.environ['PATH']}"})
+                               "PATH": f"{bin_dir}:{os.environ['PATH']}", **(extra_env or {})})
     return proc.returncode, proc.stdout + proc.stderr, env_dir / "odoo.conf"
 
 
@@ -963,7 +963,85 @@ def a_failed_conf_write_keeps_the_previous_conf():
         sed.chmod(0o755)
         rc, out, conf_path = run_wt_start(root, "0.0.0.0")
         assert rc != 0 and conf_path.read_text() == before, (rc, out)
-        assert sorted(path.name for path in conf_path.parent.iterdir()) == ["data", "odoo.conf", "port"], out
+        assert sorted(path.name for path in conf_path.parent.iterdir()) == ["data", "db", "dump", "odoo.conf", "port"], out
+
+
+def newest(path):
+    """Write an empty dump at `path`, its mtime a minute ahead so `ls -t` takes it first."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"")
+    later = time.time() + 60
+    os.utime(path, (later, later))
+    return path
+
+
+@case
+def a_dumps_day_names_the_db_and_a_recorded_name_wins():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        (root / "wt-common.sh").write_text(render_script(COMMON_SRC))
+
+        def call(*args):
+            return subprocess.run(["bash", "-c", 'source "$1"; shift; "$@"', "_", str(root / "wt-common.sh"), *args],
+                                  capture_output=True, text=True, env={**os.environ, "WT_TEST_PROJECT_DIR": str(root)},
+                                  check=True).stdout.strip()
+
+        for dump, name in (("/b/odoo_2026-10-20-18-30-06.dump", "wt_kio_1_x_102026"),
+                           ("odoo_2027-01-05-00-00-00.dump", "wt_kio_1_x_010527"),
+                           ("/b/prod.dump", "wt_kio_1_x"), ("/b/odoo_2026-10-20.dump", "wt_kio_1_x")):
+            assert call("dated_db_name", "kio-1-x", dump) == name, (dump, name)
+        assert call("db_name_for", "kio-1-x") == "wt_kio_1_x"
+        (root / ".worktrees/_env/kio-1-x").mkdir(parents=True)
+        (root / ".worktrees/_env/kio-1-x/db").write_text("wt_kio_1_x_102026\n")
+        assert call("db_name_for", "kio-1-x") == "wt_kio_1_x_102026"
+
+
+@case
+def a_new_env_is_named_after_its_dump_and_records_both():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        rc, out, conf_path = run_wt_start(root)
+        assert rc == 0 and "DB: wt_x\n" in out, out
+        dated = newest(root / "backup/odoo_2026-10-20-18-30-06.dump")
+        rc, out, conf_path = run_wt_start(root)
+        sections_ = parse_conf(conf_path.read_text())
+        assert rc == 0 and "DB: wt_x_102026\n" in out and "URL: http://wt_x_102026.localhost:1700/web" in out, out
+        assert sections_["options"]["db_name"] == "wt_x_102026", sections_
+        assert sections_["queue_job"]["host"] == "wt_x_102026.localhost", sections_
+        env_dir = conf_path.parent
+        assert (env_dir / "db").read_text() == "wt_x_102026\n" and (env_dir / "dump").read_text() == f"{dated}\n"
+
+
+@case
+def wt_dump_names_the_dump_a_new_env_restores():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        elsewhere = newest(root / "elsewhere/odoo_2026-10-21-08-52-07.dump")
+        rc, out, conf_path = run_wt_start(root, extra_env={"WT_DUMP": str(elsewhere)})
+        assert rc == 0 and "DB: wt_x_102126\n" in out, out
+        assert (conf_path.parent / "dump").read_text() == f"{elsewhere}\n"
+        rc, out, _conf = run_wt_start(root, argv=("y",), extra_env={"WT_DUMP": str(root / "gone.dump")})
+        assert rc != 0 and f"WT_DUMP={root / 'gone.dump'}: no such dump" in out, out
+        assert not (root / ".worktrees/_env/y").exists(), out
+
+
+@case
+def an_env_whose_db_exists_keeps_its_name():
+    # an older env (no db file, wt_x exists) and an env with a recorded name are reused as they are
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        run_wt_start(root)
+        env_dir = root / ".worktrees/_env/x"
+        (env_dir / "db").unlink()
+        (env_dir / "dump").unlink()
+        newest(root / "backup/odoo_2026-10-20-18-30-06.dump")
+        (root / "bin/psql").write_text('#!/usr/bin/env bash\ncase "$*" in *pg_database*) echo 1 ;; esac\n')
+        rc, out, conf_path = run_wt_start(root)
+        assert rc == 0 and "DB: wt_x\n" in out and not (env_dir / "dump").exists(), out
+        (env_dir / "db").write_text("wt_x_101326\n")
+        rc, out, conf_path = run_wt_start(root)
+        assert rc == 0 and "DB: wt_x_101326\n" in out, out
+        assert parse_conf(conf_path.read_text())["options"]["db_name"] == "wt_x_101326"
 
 
 def env_repo_project(tmp):
@@ -1430,6 +1508,37 @@ def a_reused_db_takes_no_test_lock():
             finish_bg(procs)
         out = (root / "out").read_text()
         assert run.returncode == 0 and "db-reused" in out and "waiting" not in out, out
+
+
+@case
+def the_restore_takes_the_dump_and_db_wt_start_recorded():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        cmd, env, calls = wt_restore_project(root)
+        recorded = root / "elsewhere/odoo_2026-10-12-18-30-06.dump"
+        recorded.parent.mkdir()
+        recorded.write_bytes(b"")
+        (root / ".worktrees/_env/x/dump").write_text(f"{recorded}\n")
+        (root / ".worktrees/_env/x/db").write_text("wt_x_101226\n")
+        proc = subprocess.run(cmd, capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL)
+        out, lines = proc.stdout + proc.stderr, calls.read_text().splitlines()
+        assert proc.returncode == 0 and "db-ready (wt_x_101226)" in out, out
+        restores = [line.split() for line in lines if line.startswith("pg_restore ")]
+        assert restores and restores[0][-1] == str(recorded), restores
+        assert call_index(lines, "psql", "wt_x_101226_restoring", "RENAME", "wt_x_101226;") is not None, lines
+
+
+@case
+def wt_stop_drops_the_db_the_env_recorded():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        cmd, env, events = stop_project(root)
+        (root / ".worktrees/_env/x/db").write_text("wt_x_102026\n")
+        run = start_bg(cmd, env, root / "out")
+        finish_bg([run], timeout=20)
+        text = events.read_text()
+        assert run.returncode == 0 and "DROP DATABASE IF EXISTS wt_x_102026_restoring" in text, text
+        assert "wt_x_restoring" not in text, text
 
 
 if __name__ == "__main__":

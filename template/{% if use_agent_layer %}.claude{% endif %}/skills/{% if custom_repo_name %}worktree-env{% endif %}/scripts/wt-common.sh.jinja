@@ -5,17 +5,17 @@
 #
 # Model: every parallel pipeline session gets its OWN isolated env —
 #   worktree  .worktrees/<slug>/            (git checkout, the code)
-#   runtime   .worktrees/_env/<slug>/       (odoo.conf, data_dir, port file)
-#   DB        wt_<slug>                      (independent restore of the prod dump)
+#   runtime   .worktrees/_env/<slug>/       (odoo.conf, data_dir, port/db/dump files)
+#   DB        wt_<slug>_<MMDDYY>             (independent restore of the prod dump, its day)
 #   service   odoo{{ service_suffix }}-wt@<slug>.service         (own Odoo on its own port)
 #   env repo  .worktrees/_envrepo/<slug>/   (wt-start --env-repo only: this project's own
 #                                             repo on branch <slug>, for the task's scripts/ADRs)
 # Nothing is shared between sessions except the read-only seed dump, the
 # pinned OCA/CE module sources and the postgres cluster. There is no main env:
 # no main Odoo, no reverse proxy, no main database; every pipeline run works here.
-# A session is served at http://wt_<slug>.localhost:<port> (dbfilter ^%d$).
+# A session is served at http://<DB>.localhost:<port> (dbfilter ^%d$).
 # On a shared test server the WT_* overrides below move postgres to another host
-# and serve the session on the LAN as http://wt_<slug>.<WT_HOST_SUFFIX>:<port>.
+# and serve the session on the LAN as http://<DB>.<WT_HOST_SUFFIX>:<port>.
 
 PROJ="${{ "{" }}{{ project_dir_var }}:-$HOME/{{ project_name }}}"
 # Exported: the odoo wrapper finds the project through it, else through the cwd. A dev
@@ -59,7 +59,24 @@ PSQL="psql -X -h $WT_DB_HOST -p $WT_DB_PORT -U {{ db_user }}"
 
 WT_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-db_name_for() { echo "wt_${1//-/_}"; }                                   # slug -> safe pg identifier
+# slug -> its env's DB: the name wt-start recorded, else the undated wt_<slug> of an older env
+db_name_for() {
+    if [ -s "$WT_ENVROOT/$1/db" ]; then cat "$WT_ENVROOT/$1/db"; else echo "wt_${1//-/_}"; fi
+}
+# The dump a new restore takes: WT_DUMP when set, else the newest in backup/ (shared: any
+# session's download replaces it).
+seed_dump() {
+    if [ -n "${WT_DUMP:-}" ]; then echo "$WT_DUMP"; else ls -1t "$BACKUP_DIR"/*.dump 2>/dev/null | head -1 || true; fi
+}
+# A new env's DB: wt_<slug>_<MMDDYY> from a dump named <db>_YYYY-MM-DD-HH-MM-SS.dump (its UTC
+# day); a dump named otherwise gives the undated wt_<slug>.
+dated_db_name() {
+    local name="wt_${1//-/_}"
+    if [[ "$(basename "$2")" =~ _[0-9]{2}([0-9]{2})-([0-9]{2})-([0-9]{2})-[0-9]{2}-[0-9]{2}-[0-9]{2}\.dump$ ]]; then
+        name+="_${BASH_REMATCH[2]}${BASH_REMATCH[3]}${BASH_REMATCH[1]}"
+    fi
+    echo "$name"
+}
 session_host() { echo "$1.$WT_HOST_SUFFIX"; }                          # DB -> host whose first label is the DB (dbfilter ^%d$)
 db_exists()   { $PSQL -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$1'" | grep -q 1; }
 tree_dirty()  { [ -n "$(git -C "$1" status --porcelain 2>/dev/null)" ]; }  # uncommitted or untracked files in a worktree

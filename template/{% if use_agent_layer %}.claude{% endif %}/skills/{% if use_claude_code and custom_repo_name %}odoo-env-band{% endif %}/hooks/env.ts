@@ -40,7 +40,7 @@ export function parseActive(out: string, units: readonly string[]): Record<strin
   return Object.fromEntries(units.map((unit, i) => [unit, states[i] === 'active']))
 }
 
-// worktree-env's db_name_for: slug -> safe pg identifier
+// an env's database when its env dir records none (restored before wt-start recorded it): wt_<slug>
 export function wtDb(slug: string): string {
   return `wt_${slug.replace(/-/g, '_')}`
 }

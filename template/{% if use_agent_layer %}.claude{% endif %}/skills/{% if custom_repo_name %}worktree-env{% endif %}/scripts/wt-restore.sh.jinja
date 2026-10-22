@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Restore the prod seed dump into an independent per-session DB wt_<slug> on the
+# Restore the prod seed dump into an independent per-session DB (the name wt-start
+# recorded, wt_<slug>_<MMDDYY>; the dump too, so a refreshed backup/ does not change it) on the
 # running cluster (NO pg_ctl — parallel-safe). The dump in backup/ is RAW PROD:
 # run Odoo's native neutralization (`odoo neutralize` — every installed module's
 # data/neutralize.sql: mail blocked, crons off, O2O backend deactivated, banner
@@ -15,10 +16,10 @@
 # the session. A module the update newly installs (a dependency a changed manifest
 # gained) missed `odoo neutralize`: its own neutralization queries run after it.
 # Needs the session odoo.conf and worktree — wt-start makes both first.
-# All of it runs under wt_<slug>_restoring; the DB takes its real name only once
+# All of it runs under <DB>_restoring; the DB takes its real name only once
 # neutralized and updated, so the session's service never sees the raw copy, and
 # a failed step drops the copy and its filestore and fails the restore.
-# Idempotent: if wt_<slug> already exists it is reused (re-run wt-start is cheap).
+# Idempotent: if the DB already exists it is reused (re-run wt-start is cheap).
 #
 # Usage: wt-restore.sh <slug>
 set -euo pipefail
@@ -41,8 +42,9 @@ if db_exists "$DB"; then
     echo "STATUS: db-incomplete ($DB) — previous restore never finished; recreating …"
 fi
 
-DUMP="$(ls -1t "$BACKUP_DIR"/*.dump 2>/dev/null | head -1 || true)"
+if [ -s "$WT_ENVROOT/$SLUG/dump" ]; then DUMP="$(cat "$WT_ENVROOT/$SLUG/dump")"; else DUMP="$(seed_dump)"; fi
 [ -n "$DUMP" ] || { echo "ERROR: no dump in $BACKUP_DIR — {% if backup_s3_bucket %}run \`nix run .#download-backup\`{% else %}put a prod dump into backup/{% endif %} first" >&2; exit 1; }
+[ -f "$DUMP" ] || { echo "ERROR: dump $DUMP not found" >&2; exit 1; }
 [ -f "$CONF" ] || { echo "ERROR: $CONF missing — wt-start writes it before the restore" >&2; exit 1; }
 [ -d "$WT_PATH" ] || { echo "ERROR: $WT_PATH missing — wt-start adds the worktree before the restore" >&2; exit 1; }
 
@@ -158,7 +160,7 @@ fi
 # Dev fixups (psql continues past any table this dump lacks).
 $PSQL -d "$STAGING_DB" -f "$PROJ/nix/scripts/dev-fixup.sql" || true
 
-# drop_db ends every connection to an existing wt_<slug> (db-incomplete): a wt-test run on it is
+# drop_db ends every connection to an existing $DB (db-incomplete): a wt-test run on it is
 # waited for, not killed. Taken before the filestore move, which a running test writes beside.
 LOCK_RC=0
 take_test_lock "$SLUG" "replacing $DB" || LOCK_RC=$?
@@ -166,7 +168,7 @@ take_test_lock "$SLUG" "replacing $DB" || LOCK_RC=$?
 [ "$LOCK_RC" -eq 0 ] || abort_restore "env $SLUG was stopped while the restore waited for its test lock"
 
 # Attachments live under filestore/<db name>, which a SQL rename leaves behind: moved first, so
-# wt_<slug> never exists without them. Content-addressed, so merging into an older dir is safe.
+# $DB never exists without them. Content-addressed, so merging into an older dir is safe.
 if [ -d "$FILESTORE/$STAGING_DB" ]; then
     if [ -d "$FILESTORE/$DB" ]; then
         cp -a "$FILESTORE/$STAGING_DB/." "$FILESTORE/$DB/"

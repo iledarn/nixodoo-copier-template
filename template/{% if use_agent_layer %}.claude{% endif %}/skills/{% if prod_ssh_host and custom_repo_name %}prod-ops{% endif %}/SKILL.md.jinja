@@ -38,7 +38,7 @@ command and getting an explicit OK.
 | channel | use for | limits |
 |---|---|---|
 | **RPC** (the Odoo connector: claude.ai, signed in as you) | live reads of anything your account can see, ticket plumbing | your own rights: `groups=`-restricted fields raise for a group you lack, and record rules **silently narrow** reads — a `read_group` scoped to your companies looks complete and is not. No `sudo()` over RPC. |
-| **a worktree env's DB** (a restore of the prod dump: `psql -d wt_<slug>` on the dev cluster, port {{ postgres_port }}) | finding the MECHANISM: heavy joins and history tables without load on prod, forensics, dry runs | a snapshot — check its age first (`select max(create_date) from <busy table>`); records newer than the dump are simply absent |
+| **a worktree env's DB** (a restore of the prod dump: `psql -d wt_<slug>_<MMDDYY>` on the dev cluster, port {{ postgres_port }}) | finding the MECHANISM: heavy joins and history tables without load on prod, forensics, dry runs | a snapshot — check its age first (`select max(create_date) from <busy table>`); records newer than the dump are simply absent |
 | **live `{{ odoo_cmd }} shell` over SSH** | the FIGURES: anything going to a stakeholder, a ticket or a decision | runs as superuser — read-only discipline is on you; pipe a named script, never an inline one-liner |
 
 Two rules that repeatedly save wrong conclusions:
@@ -180,7 +180,7 @@ because "is this already on prod?" has no answer. It states at least:
 - **Production status first**: not run, dry only, or LIVE with date and
   outcome.
 - **Every script**, its target and scope, and where it ran, **by database
-  name** (`LIVE on wt_<slug>`, `NOT on {{ prod_db_name }} (production)`), dry
+  name** (`LIVE on wt_<slug>_<MMDDYY>`, `NOT on {{ prod_db_name }} (production)`), dry
   and committed runs told apart in the label.
 - **A run history table**: date and time, database by name, dry or commit,
   outcome. Production times come from the data: `MIN`/`MAX(write_date)` of
