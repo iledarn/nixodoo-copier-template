@@ -1,7 +1,8 @@
 export type GateName = 'status' | 'grill' | 'qc'
 
-// how a gate opened (or why the QC gate stays shut), and when
-export type Gate = { isOpen: boolean; how: string; at: number }
+// how a gate opened (or why the QC gate stays shut), and when; `from`: the session whose run a child
+// took the gate from (absent for a gate opened in this run)
+export type Gate = { isOpen: boolean; how: string; at: number; from?: string }
 
 // one task of the block a run works through, and where it stands; the agent moves it
 export type TaskState = 'pending' | 'active' | 'done'
@@ -37,6 +38,10 @@ export type Run = {
   extraRounds?: number
   // the pull request a gh pr create of this run printed (absent until one did)
   pr?: string
+  // a child's run: the mother session whose open status and grill gates it took (absent elsewhere)
+  mother?: string
+  // a run closed at Phase 7 on another run's QC pass or PR, named for the person (absent otherwise)
+  closedOn?: string
   // Phase 7 ends a run, and so does the person's /pipeline-gate end; the run stays, to say how it ended
   isDone: boolean
 }

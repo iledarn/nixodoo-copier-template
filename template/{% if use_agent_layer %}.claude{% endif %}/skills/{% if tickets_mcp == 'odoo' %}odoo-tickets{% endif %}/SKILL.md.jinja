@@ -471,6 +471,20 @@ Delivered write (revising earlier, once the real problem is clear, is fine):
      `pipeline` this is a **hard gate**: if Teams isn't authenticated, pause,
      run the re-auth yourself (never hand the command to the user), send, then
      proceed.
+{% if use_kb %}
+  6. **load what kb knows** about the ticket's areas. Its kb record is the one `kb sync odoo`
+     made, with the {% if task_keys %}key{% else %}record id{% endif %} as `external_id`:
+     `kb query 'MATCH (r:Record {external_id: $k}) RETURN r.id AS id' -p k=<{% if task_keys %}KEY{% else %}record id{% endif %}>`. Then
+     `kb context <id>`: the record's area tags, the knowledge records that share them
+     (`[id] kind title — summary`; `kb show <id>` reads one in full) and the other open
+     tasks there.
+     - **Exit 4: the record has no area tag yet**, as every synced ticket arrives. Choose the
+       area from the ticket: the module or subsystem its title and description are about,
+       from the vocabulary `kb tags` lists (the project's `.kb/tags.toml` plus kb's built-in
+       areas). `kb edit <id> --tag <area>`, then `kb context <id>` again. When no area fits,
+       ask the user: a new area is a line in `.kb/tags.toml`, added through a PR.
+     - A kb without the `context` command: say so in one line and go on.
+{% endif %}
   Stage-move + {% if task_timeline %}Planned Dates{% else %}deadline{% endif %} + rebalance + sent status are a mandatory set;
   don't do one without the others.
 {% if task_pr_uri %}

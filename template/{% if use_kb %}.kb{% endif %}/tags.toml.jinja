@@ -1,0 +1,26 @@
+# Area tags for kb records in this project, one per line: name = "what it covers".
+# kb add here needs at least one area tag (--tag NAME): one of these or a built-in area
+# (kb, claude_setup, tooling, workflow, ...); `kb tags` lists them all. Type tags (bug,
+# feature, testing, docs, ...) are built in and are no area names. Names are lower case:
+# letters, digits, '_' and '-'.
+#
+# This file belongs to the project: the copier template seeds it once and never rewrites
+# it. Add an area for each module or subsystem records here are about (a custom module,
+# a business flow) through a pull request, so the team shares one vocabulary.
+
+[areas]
+dev_env = "this project's Nix environment: the flake, the Odoo and Python pins, addons.yaml and repos.yaml, services, PostgreSQL and the dumps in backup/"
+{% if custom_repo_name %}
+worktree_env = "the per-session Odoo envs: wt-start, wt-list, wt-stop, wt-test, a session's worktree, port, database and service"
+ci = "the checks a pull request runs and why one fails"
+{% endif %}
+{% if use_pipeline and custom_repo_name %}
+pipeline = "the development pipeline: the pipeline skill and its gates, the grill, the dev, review, documenter and verify agents, mother and child sessions"
+{% endif %}
+{% if prod_ssh_host and custom_repo_name %}
+deploy = "merging and deploying to production: the deploy skill, the deploy lock, blast radius and invariant checks"
+prod_ops = "production outside a deploy: access, read channels, forensics, ticket scripts run against prod"
+{% endif %}
+{% if test_ssh_hosts %}
+test_fleet = "the test boxes: test-server, refreshing a box from the prod dump, worktree sessions on a box"
+{% endif %}

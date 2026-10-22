@@ -494,15 +494,76 @@ export function addressOf(to: unknown): string {
   return typeof to === 'string' ? to.replace(/\s*\[[^\]]*\]\s*$/, '').trim() : ''
 }
 
-export function enterPhase(run: Run, phase: number, task: string, now: number): Run | string {
+// A pipeline split over two sessions: the mother grills and closes, a child develops and opens the PR.
+// The child loads the skill as `child <TASK-KEYS>`. Every session's run sits in the mod's store under
+// run:<session id>, which is how one session reads another's.
+const CHILD_ARGS = /^\s*child\b/i
+
+export function isChildArgs(args: string): boolean {
+  return CHILD_ARGS.test(args)
+}
+
+// how a run names another session's run to the person: its task and the start of its session id
+export function runName(run: Run, sessionId: string): string {
+  return `the ${run.task || 'pipeline'} run of session ${sessionId.slice(0, 8)}`
+}
+
+// the keys a run works on: its task and its block's
+export function runKeys(run: Run): string[] {
+  return [...new Set([run.task, ...tasksOf(run).map(task => task.key)].filter(key => key !== ''))]
+}
+
+function isOfTasks(run: Run, keys: readonly string[]): boolean {
+  return keys.some(key => run.task === key || hasTask(run, key))
+}
+
+// A gate opened in that run itself: by the person's press or their /pipeline-gate open, the Teams
+// send, or a project with no status flow. A gate a run took from another one is never passed on.
+function isOpenedThere(gate: Gate | null): boolean {
+  return isOpen(gate) && gate?.from === undefined
+}
+
+// The run a child takes its gates from: in progress, working on `task` (its task or one of its
+// block), with the Teams status and the grill both opened there.
+export function isMotherRunFor(other: Run, task: string): boolean {
+  return isActive(other) && task !== '' && isOfTasks(other, [task]) && isOpenedThere(other.status) && isOpenedThere(other.grill)
+}
+
+// A child's run takes the status and grill gates the person opened in the mother, each naming the run
+// it came from; a gate the child opened itself stays as it is. The QC gate is never taken.
+export function takeGates(run: Run, mother: Run, motherId: string, now: number): Run {
+  const source = runName(mother, motherId)
+  const taken = (own: Gate | null, given: Gate | null): Gate | null =>
+    isOpen(own) || given === null ? own : { isOpen: true, how: `${given.how}, taken from ${source}`, at: now, from: motherId }
+  return { ...run, status: taken(run.status, mother.status), grill: taken(run.grill, mother.grill), mother: motherId }
+}
+
+// What lets a run close at Phase 7 without a QC pass of its own: another run for its tasks that
+// recorded a QC pass or a PR (the child of a mother that grilled and handed off).
+export function closesOn(other: Run, keys: readonly string[]): string {
+  if (!isOfTasks(other, keys)) return ''
+  if ((other.pr ?? '') !== '') return `PR ${other.pr}`
+  return isOpen(other.qc) ? `QC ${other.qc?.how ?? 'pass'}` : ''
+}
+
+function closureRefusal(run: Run): string {
+  const keys = runKeys(run).join(', ') || 'this task'
+  return `pipeline-gates: Phase 7 is refused until the QC gate passes in this run, or a run for ${keys} in another session recorded a QC pass or a PR; none has.`
+}
+
+// `closure`: the other run this one closes on, named for the person ('' when none was found)
+export function enterPhase(run: Run, phase: number, task: string, now: number, closure = ''): Run | string {
   if (!Number.isInteger(phase) || phase < 0 || phase >= PHASES.length) return `phase must be 0 to ${PHASES.length - 1}`
   if (phase >= 2 && closedForDev(run).length > 0) return devRefusal(run, `Phase ${phase}`)
-  if (phase >= 6 && !qcHolds(run)) return prRefusal(run)
+  const isClosure = phase === PHASES.length - 1
+  if (isClosure && !qcHolds(run) && closure === '') return closureRefusal(run)
+  if (phase >= 6 && !isClosure && !qcHolds(run)) return prRefusal(run)
   // development entered anew (the next task of a block) counts its rounds afresh; back from QC it does not
   const isNewCycle = phase === 2 && run.phase !== 2 && run.phase !== 3
   return {
     ...run,
     ...(isNewCycle ? { fixRounds: 0, roundSeq: run.seq, extraRounds: 0 } : {}),
+    ...(isClosure && !qcHolds(run) ? { closedOn: closure } : {}),
     task: task !== '' ? task : run.task,
     phase,
     phaseAt: run.phaseAt.map((at, i) => (i === phase && at === 0 ? now : at)),

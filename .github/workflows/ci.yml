@@ -18,6 +18,18 @@ jobs:
       - name: tests/test_wt_start_conf.py (psql/odoo stubbed; the live PostgreSQL case skips)
         run: uv run --no-project --with jinja2 python tests/test_wt_start_conf.py
 
+  # Renders the kb SessionStart hook itself and runs it against a stub kb, so once per push.
+  kb-hook:
+    name: kb SessionStart hook corpus
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: false
+      - name: tests/test_kb_session_start.py (kb stubbed)
+        run: uv run --no-project --with jinja2 python tests/test_kb_session_start.py
+
   generate:
     runs-on: ubuntu-latest
     env:

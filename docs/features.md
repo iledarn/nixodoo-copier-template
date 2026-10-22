@@ -27,7 +27,9 @@ The full inventory behind the summary in [the README](../README.md#what-it-gener
   models + `docs/adr/` decision records, both maintained as design conversations
   resolve), `dev`/`review`/`verify`/`documenter` agents, a persistent
   **memory template** (journal / state / standup), and optional workflow skills:
-  the **pipeline** orchestrator (task → dev → QC gate → docs → demo GIF → PR), **my-status**
+  the **pipeline** orchestrator (task → dev → QC gate → docs → demo GIF → PR, split into a
+  mother session that grills and deploys and a child session that develops; see
+  [ADR 0001](adr/0001-pipeline-mother-and-child-sessions.md)), **my-status**
   (status posting, Teams), **teams-message** (readable Teams messages: HTML Teams
   actually renders, recipient verified by email, draft before send),
   **odoo-tickets** (ticket tracking in a prod Odoo),
@@ -60,7 +62,9 @@ The full inventory behind the summary in [the README](../README.md#what-it-gener
   agent and no worktree edit before the Teams status and the user's grill press, no
   `gh pr create` before a QC pass that rests on a review and a green test run, with a phase pane;
   a step that waits on the grill press pushes to the phone and asks in a dialog (Confirm /
-  Mechanical / Not yet); a block of tasks is one run whose progress (done, in work, pending)
+  Mechanical / Not yet); a child session runs on the status and grill gates the user opened in
+  its mother's run, each naming that run, behind a QC gate of its own, and the mother closes
+  once a run for its tasks recorded a QC pass or a PR; a block of tasks is one run whose progress (done, in work, pending)
   the pane and band show, each task with an open-in-Odoo link (its record URL, or its key's
   `/tasks/<key>` with `task_key_route`); only the person opens a gate or ends a run by hand
 - Optional (asked during generation): custom addons repo wiring, S3 production-backup
@@ -76,7 +80,11 @@ With `use_kb = false` a generated project carries a markdown memory seed under
 
 With `use_kb = true` the seed is not generated at all. Memory lives in
 [kb](https://github.com/okolovmark/kb) instead, and the SessionStart and SessionEnd hooks
-open the session record, print the index and the standup, and close the session.
+open the session record, print the index and the standup, and close the session. A child
+session of the pipeline gets the pinned rules and a standup count instead, a compacted session
+is asked for its session note first, and a stale kb schema is named. `.kb/tags.toml` seeds the
+project's kb area vocabulary once, with the areas of the tooling the project has; the project
+owns it from then on.
 `CLAUDE.md` gets a "Memory: kb" section, so the instructions live in the repository rather
 than in Claude Code's per-user `MEMORY.md`; turn auto-memory off locally
 (`autoMemoryEnabled: false` in `.claude/settings.local.json`) so the harness stops asking for
