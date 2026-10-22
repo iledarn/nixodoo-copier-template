@@ -243,6 +243,10 @@
 {% if prod_ssh_host %}
                     setup-ssh-access = mkScript "setup-ssh-access" { };
 {% endif %}
+{% if use_kb %}
+                    # kb (user-level): install when missing, kb-setup, register this checkout as its scope
+                    kb-setup = mkScript "kb-setup" { deps = [ pkgs.git ]; };
+{% endif %}
 {% if editor == 'vscode' %}
                     create-vscode-settings = mkScript "create-vscode-settings" { };
 {% endif %}

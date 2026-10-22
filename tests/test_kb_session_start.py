@@ -5,8 +5,9 @@ Renders the hook with jinja2 and runs it with a stub `kb` on a PATH of its own, 
 real kb and its database are never touched. Covers what the hook must do with a current
 kb and with an older one that predates --title, schema_stale or anything newer: a child
 session of the pipeline (title "[child] ...") gets the pinned rules and a standup count,
-a compacted session is told to write its session note first, a stale schema says so, and
-no kb error ever reaches the context.
+a compacted session is told to write its session note first, a stale schema says so, a
+missing kb or an unregistered checkout gets one line naming `nix run .#kb-setup`, and no kb
+error ever reaches the context.
 
 Run from the repo root: python3 tests/test_kb_session_start.py (needs jinja2, bash,
 python3, awk, sed, grep).
@@ -45,6 +46,8 @@ STATUS_OK = {"bolt_reachable": True, "schema_ok": True, "upgrade_pending": False
 
 COMPACT_LINE = "kb: the context was just compacted"
 SCHEMA_LINE = "kb: schema stale or incomplete; run kb-setup"
+INSTALL_LINE = "kb: kb is not installed, so this session has no project memory. To set it up: nix run .#kb-setup"
+REGISTER_LINE = "kb: this checkout is not registered as the kb scope"
 STANDUP_LINE = "kb today: 9 open tasks, 4 loud; a child session leaves the list out (kb today prints it)."
 
 # The stub: answers from the KB_STUB_* environment and logs every call, one JSON argv a line.
@@ -57,6 +60,16 @@ env = os.environ.get
 if args[:2] == ["--json", "status"]:
     print(env("KB_STUB_STATUS", "{}"))
     sys.exit(0 if '"schema_ok": true' in env("KB_STUB_STATUS", "") else 1)
+if args[:2] == ["scope", "which"]:
+    mode = env("KB_STUB_SCOPE", "ok")
+    if mode == "old":
+        print("Usage: kb [OPTIONS] COMMAND [ARGS]...\n\nError: No such command 'scope'.", file=sys.stderr)
+        sys.exit(2)
+    if mode == "none":
+        print(f"{args[2]} is in no scope", file=sys.stderr)
+        sys.exit(3)
+    print("someone-else" if mode == "other" else "acme-odoo-16")
+    sys.exit(0)
 if args[:2] == ["service", "start"]:
     sys.exit(1 if env("KB_STUB_START_FAILS") else 0)
 if args[:2] == ["sync", "odoo"]:
@@ -247,9 +260,30 @@ def main():
     check("bad input: exit 0", proc.returncode == 0, proc.stderr)
     check("bad input: index still printed", "## Pinned" in proc.stdout)
 
-    # no kb on PATH: silent
+    # no kb on PATH: one line naming the fix, nothing else
     proc, _ = rig.run(payload(title="[child] ACME-12"), with_kb=False)
-    check("no kb: silent", proc.returncode == 0 and proc.stdout == "" and proc.stderr == "", proc.stdout + proc.stderr)
+    check("no kb: exit 0", proc.returncode == 0, proc.stderr)
+    check("no kb: one line naming nix run .#kb-setup", proc.stdout == INSTALL_LINE + "\n", proc.stdout)
+    check("no kb: nothing on stderr", proc.stderr == "", proc.stderr)
+
+    # registration: this checkout must be the kb scope the hook uses
+    proc, calls = rig.run(payload())
+    check("registered: asks kb scope which for the repo root",
+          any(c[:2] == ["scope", "which"] and len(c) == 3 for c in calls), calls)
+    check("registered: no registration line", REGISTER_LINE not in proc.stdout)
+    for mode in ("none", "other"):
+        proc, calls = rig.run(payload(), KB_STUB_SCOPE=mode)
+        out = proc.stdout
+        check(f"scope {mode}: the line", REGISTER_LINE in out and "nix run .#kb-setup" in out, out[:400])
+        check(f"scope {mode}: inside the preview", out.find(REGISTER_LINE) < PREVIEW)
+        check(f"scope {mode}: the session still opens", opens(calls) != [], calls)
+        check(f"scope {mode}: nothing on stderr", proc.stderr == "", proc.stderr)
+    proc, _ = rig.run(payload(), KB_STUB_SCOPE="old")
+    check("kb without scope command: no line", REGISTER_LINE not in proc.stdout, proc.stdout[:300])
+    check("kb without scope command: no usage error", "No such command" not in proc.stdout + proc.stderr)
+    proc, _ = rig.run(payload(source="compact"), KB_STUB_SCOPE="none")
+    check("compact and unregistered: the compaction note stays first",
+          proc.stdout.splitlines()[0].startswith(COMPACT_LINE), proc.stdout[:300])
 
     # the local extras still run, with source and session id
     local = rig.hook.with_name("kb-session-start.local.sh")

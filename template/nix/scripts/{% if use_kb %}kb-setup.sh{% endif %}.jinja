@@ -1,0 +1,52 @@
+# shellcheck shell=bash
+# kb for this project: install kb into your user profile when it is missing, set up its
+# Neo4j user service (kb-setup) and register this checkout as the kb scope
+# "{{ project_name }}", so records made here land in it and .kb/tags.toml is read.
+# kb is user-level: one binary, one database, one service for every project on the machine,
+# and this script only makes sure of them. Safe to re-run.
+#
+#   nix run .#kb-setup              install when missing, set up, register
+#   nix run .#kb-setup -- --upgrade take the latest kb first (nix profile upgrade --refresh)
+set -euo pipefail
+
+FLAKE="github:okolovmark/kb"
+SCOPE="{{ project_name }}"
+UPGRADE=0
+for arg in "$@"; do
+    case "$arg" in
+        --upgrade) UPGRADE=1 ;;
+        -h | --help)
+            echo "nix run .#kb-setup              install kb when missing, run kb-setup, register this checkout"
+            echo "nix run .#kb-setup -- --upgrade take the latest kb first (nix profile upgrade kb --refresh)"
+            exit 0
+            ;;
+        *)
+            echo "kb-setup: unknown argument: $arg (try --help)" >&2
+            exit 2
+            ;;
+    esac
+done
+
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+if [ ! -f "$ROOT/.copier-answers.yml" ]; then
+    echo "kb-setup: run this from the {{ project_name }} checkout (no .copier-answers.yml in $ROOT)" >&2
+    exit 1
+fi
+
+if ! command -v kb >/dev/null 2>&1 && [ ! -x "$HOME/.nix-profile/bin/kb" ]; then
+    echo "kb is not installed: nix profile install $FLAKE"
+    nix profile install "$FLAKE"
+elif [ "$UPGRADE" = 1 ]; then
+    echo "Taking the latest kb: nix profile upgrade kb --refresh"
+    nix profile upgrade kb --refresh
+fi
+hash -r
+KB="$(command -v kb || echo "$HOME/.nix-profile/bin/kb")"
+# kb's own kb-setup sits next to kb in its package; called by path, so this script, which
+# has the same name, never runs itself again.
+SETUP="$(dirname "$(readlink -f "$KB")")/kb-setup"
+echo "kb: $(readlink -f "$KB")"
+
+"$SETUP"
+"$KB" scope add "$SCOPE" "$ROOT"
+"$KB" status
