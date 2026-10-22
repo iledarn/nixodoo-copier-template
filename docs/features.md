@@ -35,8 +35,9 @@ The full inventory behind the summary in [the README](../README.md#what-it-gener
   post-deploy invariant check: unbalanced postings, failed queue jobs, stuck
   crons, negative stock), **prod-ops** (working with the prod box outside a
   deploy: read-channel choice — RPC vs local prod-dump DB vs live odoo shell —
-  prod forensics, and a named-script runner with a dry → commit → read-back
-  ladder), **deploy** (the prod runbook itself: check the PR is mergeable,
+  prod forensics, a named-script runner with a dry → commit → read-back
+  ladder, and the ticket-script conventions: `scripts/<TICKET>/` layout,
+  docstring header, landing via PR and a `RUNS.html` run record), **deploy** (the prod runbook itself: check the PR is mergeable,
   derive the `-u` list from what the pull actually lands, show the plan, take
   the box's deploy lock — waiting on another developer's deploy instead of
   colliding with it — merge, one named write script per prod step, T+0/T+60
