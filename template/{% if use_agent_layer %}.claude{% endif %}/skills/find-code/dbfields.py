@@ -14,9 +14,10 @@ Usage:
 
 The connection comes from an odoo.conf, and the answer is for THE DATABASE THAT
 CONF POINTS AT (a restore of the prod dump). Which conf, first match wins:
---conf PATH; the worktree env the cwd is in (.worktrees/<slug>/ ->
-.worktrees/_env/<slug>/odoo.conf); odoo.conf at the project root; the most
-recently started worktree env. The database used is printed to stderr.
+--conf PATH; the worktree env the cwd is in (.worktrees/<slug>/, or its env-repo
+worktree .worktrees/_envrepo/<slug>/ -> .worktrees/_env/<slug>/odoo.conf);
+odoo.conf at the project root; the most recently started worktree env. The
+database used is printed to stderr.
 """
 
 import configparser
@@ -40,8 +41,10 @@ def find_conf(explicit=None):
         return explicit
     worktrees = os.path.join(ROOT, ".worktrees")
     rel = os.path.relpath(os.getcwd(), worktrees)
-    slug = rel.split(os.sep)[0]
-    if not rel.startswith("..") and slug not in (".", "_env"):
+    parts = rel.split(os.sep)
+    # an env-repo worktree (.worktrees/_envrepo/<slug>/) belongs to the env of its slug
+    slug = parts[1] if parts[0] == "_envrepo" and len(parts) > 1 else parts[0]
+    if not rel.startswith("..") and slug not in (".", "_env", "_envrepo"):
         session = os.path.join(worktrees, "_env", slug, "odoo.conf")
         if os.path.isfile(session):
             return session

@@ -24,12 +24,14 @@ export function parseGitStatus(out: string): GitStatus {
   return { branch, dirty, ahead, behind, hasUpstream }
 }
 
-// the worktree env slug when cwd is inside <project>/.worktrees/<slug>/
+// the worktree env slug when cwd is inside <project>/.worktrees/<slug>/, or in that env's
+// env-repo worktree <project>/.worktrees/_envrepo/<slug>/
 export function worktreeSlug(cwd: string, project: string): string | null {
   const root = `${project.replace(/\/+$/, '')}/.worktrees/`
   if (!`${cwd}/`.startsWith(root)) return null
-  const slug = `${cwd}/`.slice(root.length).split('/')[0] ?? ''
-  return slug !== '' && slug !== '_env' ? slug : null
+  const parts = `${cwd}/`.slice(root.length).split('/')
+  const slug = (parts[0] === '_envrepo' ? parts[1] : parts[0]) ?? ''
+  return slug !== '' && slug !== '_env' && slug !== '_envrepo' ? slug : null
 }
 
 // `systemctl --user is-active a b c` prints one state per unit, in argument order
