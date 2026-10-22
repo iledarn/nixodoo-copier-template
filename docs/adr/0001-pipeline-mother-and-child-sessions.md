@@ -44,9 +44,12 @@ only on the user's command, and closes the ticket and the kb task.
   costs questions through the mother. Accepted.
 - The child's report reaching the mother at the end of its turn, and `SendMessage` from child to
   mother, are assumptions of the desktop app; if either fails, the user relays by hand.
-- The pipeline-gates mod keeps one run per session. A child (the skill loaded as
-  `child <TASK-KEYS>`) takes the status and grill gates the user opened in its mother's run
-  for that task, read from the mod's store, which every session shares; its QC gate stays its
-  own, in front of its `gh pr create`. A mother that started a `[child] ` session closes its
-  Phase 7 without a QC pass of its own. Without this the child's dev work and the mother's
-  closure were refused until the user opened each gate by hand.
+- The pipeline-gates mod keeps one run per session. Without a change the child's dev work and
+  the mother's closure were refused until the user opened each gate by hand. Mark chose
+  (2026-10-22, through the mother session) that a child (the skill loaded as
+  `child <TASK-KEYS>`) takes the status and grill gates of an active run in another session
+  for the same task, read from the mod's store, which every session shares. It does so only
+  when both were opened in that run itself, never when that run took them from another. Each
+  taken gate names the run it came from. The mother's Phase 7 opens once a run for its tasks
+  recorded a QC pass or a PR. Nothing in the child is gated less: its QC gate in front of
+  `gh pr create` stays its own.

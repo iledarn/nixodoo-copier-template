@@ -242,11 +242,13 @@ text:
   `/pipeline-gate end`. Never ask for that to get past a refusal you can satisfy.
 - **A split run** keeps a run in each session. The mother calls `phase` for 0, 1 and 7, the
   child for 2 to 6, and each marks the block's tasks it works on. The child, loaded as
-  `child <TASK-KEYS>`, runs on the {% if status_mcp == 'teams' %}status and {% endif %}grill gates the user opened in the mother for
-  that task (their rows say "in the mother session"); its QC gate is its own, so its
-  `gh pr create` waits for its own pass. The mother's `start_session` with a `[child] ` title
-  marks its run handed off, so its Phase 7 needs no QC pass of its own. A child refused for a
-  closed {% if status_mcp == 'teams' %}status or {% endif %}grill gate tells the mother: the gate missing is the mother's.
+  `child <TASK-KEYS>`, runs on the {% if status_mcp == 'teams' %}status and {% endif %}grill gates opened in the mother's run for that
+  task, and only on gates opened there, never on ones that run took from another. Each
+  gate's row names the run it came from ("…, taken from the <KEY> run of session <id>"). Its
+  QC gate is its own, so its `gh pr create` waits for its own pass. The mother's Phase 7
+  opens once a run for its tasks in another session recorded a QC pass or a PR, and the run
+  says which one it closed on. A child refused for a closed {% if status_mcp == 'teams' %}status or {% endif %}grill gate tells
+  the mother: the gate missing is the mother's.
 
 ### Phase 0: Memory Bootstrap
 

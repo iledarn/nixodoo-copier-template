@@ -63,7 +63,8 @@ The full inventory behind the summary in [the README](../README.md#what-it-gener
   `gh pr create` before a QC pass that rests on a review and a green test run, with a phase pane;
   a step that waits on the grill press pushes to the phone and asks in a dialog (Confirm /
   Mechanical / Not yet); a child session runs on the status and grill gates the user opened in
-  its mother, behind a QC gate of its own; a block of tasks is one run whose progress (done, in work, pending)
+  its mother's run, each naming that run, behind a QC gate of its own, and the mother closes
+  once a run for its tasks recorded a QC pass or a PR; a block of tasks is one run whose progress (done, in work, pending)
   the pane and band show, each task with an open-in-Odoo link (its record URL, or its key's
   `/tasks/<key>` with `task_key_route`); only the person opens a gate or ends a run by hand
 - Optional (asked during generation): custom addons repo wiring, S3 production-backup

@@ -20,13 +20,12 @@ import {
   enterPhase,
   filePathOf,
   grantRounds,
+  closesOn,
   grillQuestion,
-  handOff,
   hasTask,
   isActive,
   isAwayGrillAnswer,
   isChildArgs,
-  isChildStart,
   isDocPath,
   isMotherRunFor,
   isNewRound,
@@ -45,6 +44,8 @@ import {
   roundsLeft,
   roundsLine,
   roundsRefusal,
+  runKeys,
+  runName,
   startRound,
   takeGates,
   taskCounts,
@@ -113,23 +114,38 @@ async function start($: EngineInterface, task: string, block: readonly string[] 
   void $.ui.open({ id: PANE, title: 'pipeline' })
 }
 
-// A child session takes the gates the person opened in its mother: the newest run of another session
-// that works on `task` with the Teams status and the grill open. The store holds every session's run.
-async function adoptMother($: EngineInterface, task: string): Promise<boolean> {
-  const current = await read($, run)
-  if (!isActive(current) || task === '' || closedForDev(current).length === 0) return false
+// The runs of the other sessions, newest first: the store holds every session's run under run:<id>.
+async function otherRuns($: EngineInterface): Promise<{ id: string; run: Run }[]> {
   const mine = `run:${await $.session.id()}`
-  let mother: { id: string; run: Run } | null = null
+  const found: { id: string; run: Run }[] = []
   for (const key of await $.store.keys()) {
     if (!key.startsWith('run:') || key === mine) continue
     const other = (await $.store.get(key)) as Run | null | undefined
-    if (other !== null && other !== undefined && isMotherRunFor(other, task) && (mother === null || other.startedAt > mother.run.startedAt)) {
-      mother = { id: key.slice('run:'.length), run: other }
-    }
+    if (other !== null && other !== undefined) found.push({ id: key.slice('run:'.length), run: other })
   }
-  if (mother === null) return false
+  return found.sort((a, b) => b.run.startedAt - a.run.startedAt)
+}
+
+// A child session takes the gates the person opened in its mother: the newest run of another session
+// that works on `task` with the Teams status and the grill both opened there.
+async function adoptMother($: EngineInterface, task: string): Promise<boolean> {
+  const current = await read($, run)
+  if (!isActive(current) || task === '' || closedForDev(current).length === 0) return false
+  const mother = (await otherRuns($)).find(other => isMotherRunFor(other.run, task))
+  if (mother === undefined) return false
   await save($, takeGates(current, mother.run, mother.id, await $.clock.now()))
   return true
+}
+
+// What a run with no QC pass of its own closes on at Phase 7: another session's run for its tasks that
+// recorded a QC pass or a PR, named for the person; '' when there is none.
+async function closureFor($: EngineInterface, current: Run): Promise<string> {
+  const keys = runKeys(current)
+  for (const other of await otherRuns($)) {
+    const what = closesOn(other.run, keys)
+    if (what !== '') return `${what} of ${runName(other.run, other.id)}`
+  }
+  return ''
 }
 
 async function restore($: EngineInterface): Promise<void> {
@@ -226,6 +242,7 @@ function describe(current: Run | null): string {
       `pipeline-gates: ${endedLine(current)}; nothing is gated any more.`,
       ...(blockLine(current) === '' ? [] : [`tasks: ${blockLine(current)}`]),
       `PR: ${current.pr ?? 'no gh pr create seen in this run'}`,
+      ...((current.closedOn ?? '') === '' ? [] : [`closed on the ${current.closedOn}`]),
       'A new pipeline (the pipeline skill, Phase 0, or tasks with `add` naming another task) starts a new run.',
     ].join('\n')
   }
@@ -240,9 +257,6 @@ function describe(current: Run | null): string {
     `QC evidence since the last code change: review ${evidence.review ? 'yes' : 'no'}, green tests ${evidence.tests ? 'yes' : 'no'}${current.lastTests ? ` (last run: ${current.lastTests})` : ''}`,
     `dev allowed: ${closedForDev(current).length === 0 ? 'yes' : 'no'} · PR allowed: ${qcHolds(current) ? 'yes' : 'no'}`,
     roundsLine(current),
-    ...(current.handedOffAt === undefined
-      ? []
-      : ['handed off to a child session: its run holds the QC gate and the PR; Phase 7 closes this one without a pass of its own']),
   ].join('\n')
 }
 
@@ -285,7 +299,7 @@ export const register: Register = on => {
     await $.tool.register({
       name: 'phase',
       description:
-        "Records that the pipeline enters a phase (0 memory bootstrap ... 7 memory closure), with the task key once known. Call it at the start of every phase. Refused for Phase 2 and later while the Teams status gate or the grill gate is closed, and for Phase 6 and later until the QC verdict passed; the refusal says what is missing. A child session (the pipeline skill loaded as `child <TASK-KEYS>`) runs on the status and grill gates the person opened in its mother; a mother that started a `[child] ` session closes Phase 7 without a QC pass of its own, since the child's run holds that gate. Starts the run when none is active.",
+        "Records that the pipeline enters a phase (0 memory bootstrap ... 7 memory closure), with the task key once known. Call it at the start of every phase. Refused for Phase 2 and later while the Teams status gate or the grill gate is closed, and for Phase 6 and later until the QC verdict passed; the refusal says what is missing. A child session (the pipeline skill loaded as `child <TASK-KEYS>`) runs on the status and grill gates the person opened in its mother's run for the task, each naming that run; its QC gate stays its own. A run without a QC pass of its own (the mother's) enters Phase 7 once a run for its task in another session recorded a QC pass or a PR. Starts the run when none is active.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -352,13 +366,15 @@ export const register: Register = on => {
     await start($, task)
     const current = await read($, run)
     if (!isActive(current)) return { result: describe(current) }
-    let entered = enterPhase(current, phase, task, await $.clock.now())
+    // a mother's closure rests on its child's run: the QC pass or the PR it recorded
+    const closure = phase === PHASES.length - 1 && !qcHolds(current) ? await closureFor($, current) : ''
+    let entered = enterPhase(current, phase, task, await $.clock.now(), closure)
     let asked = ''
     if (typeof entered === 'string' && phase >= 2 && mayAskGrill(current)) {
       const answer = await waitForGrill($, current, `Phase ${phase}`)
       const fresh = await read($, run)
       if (!isActive(fresh)) return { result: describe(fresh) }
-      entered = enterPhase(fresh, phase, task, await $.clock.now())
+      entered = enterPhase(fresh, phase, task, await $.clock.now(), closure)
       if (typeof entered === 'string' && !isOpen(fresh.grill)) asked = askedNote(answer)
     }
     if (typeof entered === 'string') {
@@ -503,10 +519,6 @@ export const register: Register = on => {
     if (isPr) {
       const url = prUrlIn(await bashOutput($, ran.result, ran.text))
       if (url !== '') await change($, r => ({ ...r, pr: url }))
-    }
-    if (isChildStart(tool, input)) {
-      const at = await $.clock.now()
-      await change($, r => (r.handedOffAt === undefined ? handOff(r, at) : r))
     }
     if (tool.endsWith('__teams_send_chat_message')) {
       const chat = typeof input.chatId === 'string' ? input.chatId : 'a chat'
