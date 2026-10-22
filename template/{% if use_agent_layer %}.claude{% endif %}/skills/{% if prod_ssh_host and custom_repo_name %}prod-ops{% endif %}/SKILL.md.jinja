@@ -120,6 +120,82 @@ model, records affected, dry-run vs committed, counts. Mechanics (`begin_upload`
 → `message_post` with `attachment_ids`): `odoo-tickets` skill, Attachments.
 {% endif %}
 
+## Ticket scripts: layout, header, run record
+
+A script a ticket runs against data (a fix, a backfill, a one-time setup, a
+read-only listing) lives in the repo, so the next person can see what touched
+which database.
+
+**Where.** `scripts/<TICKET>/<descriptive_snake_case>.py` (`swap_po_line_part.py`,
+not `fix.py`); a multi-step run appends `_step1`, `_step2`. A one-off probe you
+will not run again stays in `/tmp`.
+
+**Landing.** Branch `<TICKET>-<slug>` off `origin/main`, push, `gh pr create`,
+and the user merges - also for a lone file, and especially once it has touched
+prod: the PR is the review record of what ran there. Commit messages:
+`[ADD] scripts: <TICKET> <what it does>` for the script, `[DOC] scripts:
+<TICKET> <which run>` for a run-record update. Once the script PR is merged, a
+later run-record update goes on its own small PR (`<TICKET>-runs`).
+
+**Running the merged file on prod.** Run what was reviewed: extract it from the
+merged ref (`git fetch -q origin && git show origin/main:scripts/<TICKET>/<name>.py
+> <name>.py`), check its sha1 against the copy that ran dry, and pass that file
+to `prod-run-odoo-script.sh`. The prod checkout (`{{ prod_remote_project_dir }}`)
+does not have to move for it.
+
+**Header.** The module docstring is the script's manual:
+
+```python
+#!/usr/bin/env python
+# <TICKET>: <one-line subject>
+"""<TICKET> - odoo shell runner: <what it changes, on which records>.
+
+<why: the symptom and its cause, with the record names a reader can open>
+
+<how: what the script derives, the guard that makes it refuse (e.g. derived
+ids must equal PLAN), and the invariant it keeps>
+
+<journal: what goes to ir.logging and how a revert reads it>
+
+Dry run (rolls back):
+    {{ odoo_cmd }} shell -c .worktrees/_env/<slug>/odoo.conf --no-http < scripts/<TICKET>/<name>.py
+Live: SCRIPT_MODE=commit (the prod-run-odoo-script.sh switch).
+Idempotent: <yes/no, and what a re-run prints>.
+"""
+```
+
+Print the planned changes (ids, old -> new, counts) in both modes, refuse with
+an itemised reason instead of writing half, and keep the script contract above.
+
+**The run record: `RUNS.html` beside the scripts.** Every ticket folder whose
+scripts ran anywhere carries a `RUNS.html` answering *what has run, where, and
+what has not*. A folder of scripts without one cannot be acted on safely,
+because "is this already on prod?" has no answer. It states at least:
+
+- **Production status first**: not run, dry only, or LIVE with date and
+  outcome.
+- **Every script**, its target and scope, and where it ran, **by database
+  name** (`LIVE on wt_<slug>`, `NOT on {{ prod_db_name }} (production)`), dry
+  and committed runs told apart in the label.
+- **A run history table**: date and time, database by name, dry or commit,
+  outcome. Production times come from the data: `MIN`/`MAX(write_date)` of
+  the touched rows, or, when the script wrote by SQL and left `write_date`
+  alone, the `create_date` of its `ir.logging` rows. Write zones as an offset
+  or UTC (`09:01 +08`, `01:01:30 UTC`), never a local abbreviation: `date`
+  prints Asia/Manila as `PST`, which most readers take as UTC-8.
+- **The dev databases by name** and the dump they were restored from.
+- **The sequence** when order matters, including steps outside this repo (a
+  deploy, a decision, a manual step on the floor), and what breaks if it is not
+  kept. The script enforces the order by refusing; the page only explains it.
+- **What was left undone on purpose**, and why.
+- **Incidents**: a guard that fired, a run that misreported, a surprise in the
+  data, two sentences each.
+- **The full logs, embedded** in `<details>` blocks, so the file stands alone.
+
+Self-contained HTML (inline CSS, no external fonts, scripts or images),
+readable in light and dark, since it is opened from disk and from GitHub.
+Update it in the same commit as the run it records, production included.
+
 ## Service ops
 
 - Odoo on the box is the systemd **user** unit `create-systemd-service`
