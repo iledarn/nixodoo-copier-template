@@ -185,4 +185,14 @@ Written like this:
 {% if odoo_version == '16.0' %}
 - A view written from `odoo shell` stays cached in the running server until
   `env.registry.clear_caches(); env.registry.signal_changes()` and a commit.
+- A field that appears more than once in a form: the 16.0 web client keeps the
+  modifiers of its LAST node (`activeFields` in `form_arch_parser.js`) and
+  leaves a readonly field out of the save. An added duplicate with
+  `readonly="1"` silently stops the field saving everywhere on that form
+  (KIO-1952: a draft MO's Quantity); give it its siblings' readonly domain, and
+  assert the last node's modifiers in a test - Python `Form` ANDs duplicates
+  and cannot catch it.
 {% endif %}
+- The browser pane must be visible: hidden, the web client never renders
+  (blank page under the navbar while RPCs succeed), so check
+  `tabs_context` before reading a blank page as a bug.
