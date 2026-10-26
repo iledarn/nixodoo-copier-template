@@ -3,12 +3,14 @@
 
 Run from the repo root: python3 tests/test_antigravity_hook.py
 
-The adapter runs the Claude Code hooks wired in .claude/settings.json under Antigravity.
-Two answers looked right and were not: `{}` reads as an empty decision and Antigravity
-denies the call, and `{"decision": "allow"}` approves it past Antigravity's own
-permission settings. With no objection the adapter must print NOTHING, as entire's
-Antigravity hook does. agy also sends arg values JSON-encoded twice
-(`"TargetFile": "\\"/path\\""`), which got past a path guard before they were unwrapped.
+The adapter runs the Claude Code hooks wired in .claude/settings.json under Antigravity
+and enforces a safe-perimeter auto-mode equivalent to Claude Code's autoMode:
+- `{"decision": "deny", "reason": ...}` when a guard hook, permissions.deny, or pipeline-gates blocks;
+- `{"decision": "auto_approve"}` when the call is inside the project's safe perimeter;
+- `{"decision": "force_ask", "reason": ...}` when the call touches paths or commands outside the safe perimeter;
+- empty stdout `""` only when no tool name is present (broken/empty stdin).
+agy also sends arg values JSON-encoded twice (`"TargetFile": "\\"/path\\""`), which got
+past a path guard before they were unwrapped.
 
 Each case builds a tiny project (adapter, settings.json, two stub hooks) in a temp dir.
 """
@@ -97,6 +99,16 @@ def cli(root, *argv):
     )
 
 
+def classify(out):
+    if out.startswith('{"decision": "deny"'):
+        return "deny"
+    if out.startswith('{"decision": "force_ask"'):
+        return "ask"
+    if out == '{"decision": "auto_approve"}':
+        return "allow"
+    return out
+
+
 def main():
     adapter_path = sys.argv[1] if len(sys.argv) > 1 else ADAPTER
     root = project(adapter_path)
@@ -104,27 +116,70 @@ def main():
     wt_code = f"{root}/.worktrees/kio-1/mod/models.py"
     wt_doc = f"{root}/.worktrees/kio-1/mod/README.rst"
     meta = f"{root}/.entire/metadata/t.json"
-    # (want, label, mode, tool, args); want: "" silent, "deny" a denial, "{}" for post
+    home_file = f"{root}/home/Documents/notes.txt"
+    bashrc = f"{root}/home/.bashrc"
+    agy_cfg = f"{root}/home/.gemini/config/config.json"
+    ssh_key = f"{root}/home/.ssh/id_rsa"
+    # (want, label, mode, tool, args); want: "allow", "ask", "deny", "" silent, "{}" for post
     cases = [
-        ("", "plain command passes silently", "pre", "run_command", {"CommandLine": "ls -la"}),
+        ("allow", "plain command inside safe perimeter is allowed", "pre", "run_command", {"CommandLine": "ls -la"}),
         ("deny", "guard blocks a command", "pre", "run_command", {"CommandLine": "rm -rf /"}),
         ("deny", "guard blocks a command, args encoded twice", "pre", "run_command", twice({"CommandLine": "rm -rf /"})),
         ("deny", "guard blocks a read-only edit", "pre", "replace_file_content", {"TargetFile": core}),
         ("deny", "guard blocks a read-only edit, args encoded twice", "pre", "write_to_file", twice({"TargetFile": core, "Overwrite": True})),
-        ("", "an allowed edit passes silently", "pre", "write_to_file", twice({"TargetFile": mine, "Overwrite": True})),
-        ("", "edit_file uses Path and passes when allowed", "pre", "edit_file", {"Path": mine}),
+        ("allow", "an allowed edit inside project is allowed", "pre", "write_to_file", twice({"TargetFile": mine, "Overwrite": True})),
+        ("allow", "edit_file uses Path and is allowed inside project", "pre", "edit_file", {"Path": mine}),
         ("deny", "edit_file uses Path and blocks read-only", "pre", "edit_file", {"Path": core}),
         ("deny", "permissions.deny covers view_file", "pre", "view_file", {"AbsolutePath": meta}),
         ("deny", "permissions.deny covers read_file", "pre", "read_file", {"Path": meta}),
         ("deny", "permissions.deny covers view_file, args encoded twice", "pre", "view_file", twice({"AbsolutePath": meta})),
         ("deny", "permissions.deny covers a command naming the path", "pre", "run_command", {"CommandLine": "cat .entire/metadata/t.json"}),
-        ("", "a tool with no Claude twin passes silently", "pre", "invoke_subagent", {"Subagents": "[]"}),
+        ("allow", "invoke_subagent is allowed when pipeline-gates is idle", "pre", "invoke_subagent", {"Subagents": "[]"}),
         ("{}", "post answers {}", "post", "write_to_file", {"TargetFile": mine}),
+        # Safe perimeter allow cases
+        ("allow", "systemctl --user restart on odoo-wt unit is allowed", "pre", "run_command", {"CommandLine": "systemctl --user restart odoo-wt@kio-1.service"}),
+        ("allow", "rm inside project .worktrees/_env is allowed", "pre", "run_command", {"CommandLine": "rm -rf .worktrees/_env/kio-1"}),
+        ("allow", "whitelistedgh pr merge with --match-head-commit is allowed", "pre", "run_command", {"CommandLine": "gh pr merge 42 --squash --delete-branch --match-head-commit 0123456789abcdef0123456789abcdef01234567"}),
+        ("allow", "whitelisted deploy script with --apply is allowed", "pre", "run_command", {"CommandLine": "bash .claude/skills/deploy/scripts/prod-requeue-jobs.sh --apply"}),
+        ("allow", "safe inline python stdlib inspection is allowed", "pre", "run_command", {"CommandLine": "python3 -c \"import json, sys; print(json.dumps({'ok': True}))\""}),
+        ("allow", "git status and diff inside project are allowed", "pre", "run_command", {"CommandLine": "git status && git diff --stat"}),
+        ("allow", "gh pr view is allowed", "pre", "run_command", {"CommandLine": "gh pr view 42"}),
+        ("allow", "read_file inside project is allowed", "pre", "read_file", {"Path": mine}),
+        ("allow", "call_mcp_tool read/send is allowed", "pre", "call_mcp_tool", {"ServerName": "kaertech-odoo", "ToolName": "search_read"}),
+        # Default-ask (allowlist-only) cases: anything not explicitly allowlisted prompts user
+        ("ask", "unlisted command curl prompts user", "pre", "run_command", {"CommandLine": "curl -s https://example.com"}),
+        ("ask", "unlisted command npx prompts user", "pre", "run_command", {"CommandLine": "npx cowsay hi"}),
+        ("ask", "unlisted git subcommand clean prompts user", "pre", "run_command", {"CommandLine": "git clean -fd"}),
+        ("ask", "git branch -D prompts user", "pre", "run_command", {"CommandLine": "git branch -D feat"}),
+        ("ask", "git reset --hard prompts user", "pre", "run_command", {"CommandLine": "git reset --hard HEAD~1"}),
+        ("ask", "unlisted nix subcommand profile install prompts user", "pre", "run_command", {"CommandLine": "nix profile install nixpkgs#hello"}),
+        ("ask", "unlisted uv subcommand tool install prompts user", "pre", "run_command", {"CommandLine": "uv tool install ruff"}),
+        ("ask", "cat outside project in HOME prompts user", "pre", "run_command", {"CommandLine": f"cat {home_file}"}),
+        ("ask", "unpinned deploy script call prompts user", "pre", "run_command", {"CommandLine": "bash .claude/skills/deploy/scripts/prod-deploy-modules.sh main kaertech_base"}),
+        ("ask", "rm outside project in HOME prompts user", "pre", "run_command", {"CommandLine": "rm -rf ~/Documents/notes.txt"}),
+        ("ask", "rm on project top-level src prompts user", "pre", "run_command", {"CommandLine": "rm -rf src"}),
+        ("ask", "sudo command prompts user", "pre", "run_command", {"CommandLine": "sudo systemctl restart nginx"}),
+        ("ask", "system-level systemctl without --user prompts user", "pre", "run_command", {"CommandLine": "systemctl restart postgresql"}),
+        ("ask", "systemctl --user on unrelated unit prompts user", "pre", "run_command", {"CommandLine": "systemctl --user stop pipewire.service"}),
+        ("ask", "kill/pkill prompts user", "pre", "run_command", {"CommandLine": "pkill -9 -f python"}),
+        ("ask", "git push to main prompts user", "pre", "run_command", {"CommandLine": "git push origin main"}),
+        ("ask", "git -C repo push --force prompts user", "pre", "run_command", {"CommandLine": "git -C src/mine push --force origin feat"}),
+        ("ask", "unpinned gh pr merge prompts user", "pre", "run_command", {"CommandLine": "gh pr merge 42 --squash"}),
+        ("ask", "arbitrary ssh command prompts user", "pre", "run_command", {"CommandLine": "ssh user@example.com 'uptime'"}),
+        ("ask", "inline python mutating HOME prompts user", "pre", "run_command", {"CommandLine": "python3 -c \"import shutil, pathlib; shutil.rmtree(pathlib.Path.home() / 'foo')\""}),
+        ("ask", "inline python spawning subprocess prompts user", "pre", "run_command", {"CommandLine": "python3 -c \"import subprocess; subprocess.run(['ls'])\""}),
+        ("ask", "shell redirection outside project prompts user", "pre", "run_command", {"CommandLine": f"echo hi > {home_file}"}),
+        ("ask", "sed -i outside project prompts user", "pre", "run_command", {"CommandLine": f"sed -i 's/a/b/' {home_file}"}),
+        ("ask", "edit_file on ~/.bashrc prompts user", "pre", "edit_file", {"Path": bashrc}),
+        ("ask", "edit_file on ~/.gemini/config/config.json prompts user", "pre", "edit_file", {"Path": agy_cfg}),
+        ("ask", "read_file on ~/.ssh/id_rsa prompts user", "pre", "read_file", {"Path": ssh_key}),
+        ("ask", "read_file outside project in HOME prompts user", "pre", "read_file", {"Path": home_file}),
+        ("ask", "call_mcp_tool unlink prompts user", "pre", "call_mcp_tool", {"ServerName": "kaertech-odoo", "ToolName": "unlink"}),
     ]
     failures = 0
     for want, label, mode, tool, args in cases:
         out = call(root, mode, tool, args).strip()
-        got = "deny" if out.startswith('{"decision": "deny"') else out
+        got = classify(out)
         ok = got == want
         failures += not ok
         print(f"  {'ok  ' if ok else 'FAIL'} {label}" + ("" if ok else f": want {want!r}, got {out!r}"))
@@ -150,21 +205,21 @@ def main():
     ]
     for want, label, mode, tool, args in pipeline_cases_before:
         out = call(root, mode, tool, args).strip()
-        got = "deny" if out.startswith('{"decision": "deny"') else out
+        got = classify(out)
         ok = got == want
         failures += not ok
         print(f"  {'ok  ' if ok else 'FAIL'} {label}" + ("" if ok else f": want {want!r}, got {out!r}"))
 
     cli(root, "open", "grill", "confirmed")
     pipeline_cases_after_grill = [
-        ("", "pipeline-gates allows dev subagent once status & grill open", "pre", "invoke_subagent", {"TypeName": "dev"}),
-        ("", "pipeline-gates allows worktree code edit once status & grill open", "pre", "edit_file", {"Path": wt_code}),
+        ("allow", "pipeline-gates allows dev subagent once status & grill open", "pre", "invoke_subagent", {"TypeName": "dev"}),
+        ("allow", "pipeline-gates allows worktree code edit once status & grill open", "pre", "edit_file", {"Path": wt_code}),
         ("{}", "worktree code edit advances seq in post", "post", "edit_file", {"Path": wt_code}),
         ("deny", "pipeline-gates blocks gh pr create before qc pass", "pre", "run_command", {"CommandLine": "gh pr create --title test"}),
     ]
     for want, label, mode, tool, args in pipeline_cases_after_grill:
         out = call(root, mode, tool, args).strip()
-        got = "deny" if out.startswith('{"decision": "deny"') else out
+        got = classify(out)
         ok = got == want
         failures += not ok
         print(f"  {'ok  ' if ok else 'FAIL'} {label}" + ("" if ok else f": want {want!r}, got {out!r}"))
@@ -172,13 +227,13 @@ def main():
     cli(root, "qc-verdict", "pass", "review and tests green")
     pipeline_cases_after_qc = [
         ("{}", "worktree doc edit does not invalidate qc pass", "post", "edit_file", {"Path": wt_doc}),
-        ("", "pipeline-gates allows gh pr create after qc pass and doc edit", "pre", "run_command", {"CommandLine": "gh pr create --title test"}),
+        ("allow", "pipeline-gates allows gh pr create after qc pass and doc edit", "pre", "run_command", {"CommandLine": "gh pr create --title test"}),
         ("{}", "worktree code edit invalidates qc pass", "post", "edit_file", {"Path": wt_code}),
         ("deny", "pipeline-gates blocks gh pr create after new code edit", "pre", "run_command", {"CommandLine": "gh pr create --title test"}),
     ]
     for want, label, mode, tool, args in pipeline_cases_after_qc:
         out = call(root, mode, tool, args).strip()
-        got = "deny" if out.startswith('{"decision": "deny"') else out
+        got = classify(out)
         ok = got == want
         failures += not ok
         print(f"  {'ok  ' if ok else 'FAIL'} {label}" + ("" if ok else f": want {want!r}, got {out!r}"))
