@@ -724,9 +724,9 @@ conversation:
 
 **Start the child** with `mcp__ccd_session__start_session`, one call per child:
 
-- `title`: `[child] <TASK-KEYS> <short title>`, under 60 characters. The `[child] ` prefix is
-  how the child's SessionStart hook knows to print the pinned rules and a standup count
-  instead of the whole index and standup, so it is never left out.
+- `title`: `[child] <TASK-KEYS> <short title>`, under 60 characters. The `[child] ` prefix tells
+  the user and the child which session this is; the SessionStart hook never sees it (the app
+  passes no title) and prints the same output for every session.
 - `prompt`: the brief. `background`: one paragraph on the run (the tickets, the grill's
   outcome, where the tickets stand); the tool wants at least 80 characters of it.
 - `context: "fresh"` and `use_worktree: false`: addons work runs in this base checkout, in the
