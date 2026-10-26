@@ -26,9 +26,6 @@ only points Antigravity at them. Change behaviour there, not here.
 | `entire` + `.claude/hooks/entire-fanout.sh` | `hooks.json` + `hooks/entire-fanout.sh` | `entire hooks antigravity` in root + fan-out to nested repos under `src/` |
 {% endif %}
 {% endif %}
-{% if use_claude_code %}
-| redact-secrets mod | `hooks/redact.ts` | disabled (`hooks.json` `PostToolUse` does not pass `result` / `overwriteResult` in Antigravity) |
-{% endif %}
 | `permissions.deny` (Read) | `hooks/claude_hook.py` | denied in PreToolUse |
 {% if status_mcp == 'teams' %}
 | claude.ai connectors | `plugins/` | `plugins/teams-mcp/` (`okolovmark/teams-mcp`) + project-local MCP plugins |

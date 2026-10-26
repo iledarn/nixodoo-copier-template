@@ -98,19 +98,15 @@ the newest. Put `antigravity` in the close's Tags.
 `.agents/hooks.json` runs the Claude Code hooks from `.claude/hooks/` through
 `.agents/hooks/claude_hook.py`, plus `entire` (`entire hooks antigravity ...` for the root repo and
 {% if custom_repo_name %}
-`.agents/hooks/entire-fanout.sh` for nested repos like `src/{{ custom_repo_name }}`).{% if use_claude_code %} `redact-secrets` in{% endif +%}
+`.agents/hooks/entire-fanout.sh` for nested repos like `src/{{ custom_repo_name }}`).
 {% else %}
-`.agents/hooks/entire-fanout.sh` for nested repos under `src/`).{% if use_claude_code %} `redact-secrets` in{% endif +%}
+`.agents/hooks/entire-fanout.sh` for nested repos under `src/`).
 {% endif %}
 {% else %}
 ## Hooks
 
 `.agents/hooks.json` runs the Claude Code hooks from `.claude/hooks/` through
-`.agents/hooks/claude_hook.py`.{% if use_claude_code %} `redact-secrets` in{% endif +%}
-{% endif %}
-{% if use_claude_code %}
-`.agents/hooks/redact.ts` is kept disabled in `hooks.json` until Antigravity's `jsonhook` stops
-stripping `result` from `PostToolUse` payloads.
+`.agents/hooks/claude_hook.py`.
 {% endif %}
 
 - A denial from `guard-bash` or `guard-readonly` is final: run nothing that routes around it.
@@ -128,9 +124,6 @@ stripping `result` from `PostToolUse` payloads.
 {% endif %}
 {% if use_entire %}
 - `.entire/metadata/` is read-denied everywhere: it holds session transcripts.
-{% endif %}
-{% if use_claude_code %}
-- `«redacted»` in a tool result is a masked secret. Do not try to recover the value.
 {% endif %}
 - **Terminal sandbox**: Antigravity's default command sandbox does not mount `/nix`,
   `~/.local/bin`, or `/run/user/$UID/bus`, and blocks network/loopback sockets. Either disable the
