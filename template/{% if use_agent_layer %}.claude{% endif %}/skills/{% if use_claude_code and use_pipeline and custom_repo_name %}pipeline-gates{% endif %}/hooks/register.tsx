@@ -137,6 +137,16 @@ async function adoptMother($: EngineInterface, task: string): Promise<boolean> {
   return true
 }
 
+// The pipeline skill loaded with `args`, typed as /pipeline or called through the Skill tool: its task
+// keys start or join the run, and a child takes its mother's gates.
+async function startPipeline($: EngineInterface, args: string): Promise<void> {
+  const keys = taskKeysIn(args)
+  await start($, keys[0] ?? '', keys)
+  if (isChildArgs(args)) {
+    for (const key of keys) if (await adoptMother($, key)) break
+  }
+}
+
 // What a run with no QC pass of its own closes on at Phase 7: another session's run for its tasks that
 // recorded a QC pass or a PR, named for the person; '' when there is none.
 async function closureFor($: EngineInterface, current: Run): Promise<string> {
@@ -351,8 +361,10 @@ export const register: Register = on => {
     return started
   })
 
-  on('skill.prompt', { skill: 'pipeline' }, async ($, e, next) => {
-    await start($, '')
+  // /pipeline typed; not at skill.prompt, which Claude Code's built-in cc-plugin-sec-default (outermost
+  // for Team and Enterprise organizations) sends past every plugin a person installs
+  on('prompt.submit', { command: { name: 'pipeline' } }, async ($, e, next) => {
+    await startPipeline($, e.command?.args ?? '')
     return next(e)
   })
 
@@ -445,14 +457,7 @@ export const register: Register = on => {
   on('tool.call', async ($, e, next) => {
     const tool = String(e.tool)
     const input = e as unknown as Record<string, unknown>
-    if (tool === 'Skill' && input.skill === 'pipeline') {
-      const args = String(input.args ?? '')
-      const keys = taskKeysIn(args)
-      await start($, keys[0] ?? '', keys)
-      if (isChildArgs(args)) {
-        for (const key of keys) if (await adoptMother($, key)) break
-      }
-    }
+    if (tool === 'Skill' && input.skill === 'pipeline') await startPipeline($, String(input.args ?? ''))
 
     const current = await read($, run)
     const path = filePathOf(tool, input)
