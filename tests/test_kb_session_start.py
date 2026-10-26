@@ -3,9 +3,10 @@
 
 Renders the hook with jinja2 and runs it with a stub `kb` on a PATH of its own, so the
 real kb and its database are never touched. Covers what the hook must do with a current
-kb and with an older one that predates --title, schema_stale or anything newer: a child
-session of the pipeline (title "[child] ...") gets the pinned rules and a standup count,
-a compacted session is told to write its session note first, a stale schema says so, a
+kb and with an older one that predates --title, schema_stale, notices or anything newer:
+every session gets the pinned rules, a standup count and the count of waiting notices,
+under the 10,000 characters Claude Code keeps of a hook's output however busy kb is; a
+compacted session is told to write its session note first, a stale schema says so, a
 missing kb or an unregistered checkout gets one line naming `nix run .#kb-setup`, and no kb
 error ever reaches the context.
 
@@ -30,7 +31,7 @@ SRC = ROOT / (
 )
 SCOPE = "acme-odoo-16"
 # Claude Code keeps 10,000 characters of a hook's output in context, and past that the
-# first 2,000 only: what the model must act on comes first, a child stays under the cap.
+# first 2,000 only: what the model must act on comes first, and the whole stays under the cap.
 CONTEXT_CAP = 10_000
 PREVIEW = 2_000
 
@@ -41,14 +42,30 @@ INDEX = "\n".join(
 )
 INDEX_NO_PINS = "\n".join([f"# kb index 2026-10-22 ({SCOPE}) — generated", "", "## Recent", *RECENT[:3]])
 TASKS = [{"id": i, "level": 3 if i < 4 else 2, "title": f"task {i}"} for i in range(9)]
-TODAY_TEXT = f"kb today 2026-10-22 ({SCOPE})\n" + "\n".join(f"[{t['id']}] L{t['level']} {t['title']}" for t in TASKS)
 STATUS_OK = {"bolt_reachable": True, "schema_ok": True, "upgrade_pending": False}
 
 COMPACT_LINE = "kb: the context was just compacted"
 SCHEMA_LINE = "kb: schema stale or incomplete; run kb-setup"
 INSTALL_LINE = "kb: kb is not installed, so this session has no project memory. To set it up: nix run .#kb-setup"
 REGISTER_LINE = "kb: this checkout is not registered as the kb scope"
-STANDUP_LINE = "kb today: 9 open tasks, 4 loud; a child session leaves the list out (kb today prints it)."
+STANDUP_LINE = "kb today: 9 open tasks, 4 loud, 2 quiet; the list is left out here: kb today prints it."
+RECENT_LINE = "120 recent records are left out here: kb index lists them, kb search finds any record."
+NOTICES_ASK = "In your first reply tell them, and give them this command in its own bash block to run themselves"
+LEFT_OUT = "pinned rules left out to fit the context: kb index lists them"
+CUT_LINE = "kb: the session start was cut here to fit the context; kb index and kb today print the rest"
+
+# A busy kb: twice the pinned rules a 10,000-character context holds, a long standup, a sync
+# that names many possible duplicates, sessions without summary, and chatty local extras.
+BUSY_PINNED = [f"- [{i}] feedback_busy_rule_{i:03} — " + "a rule the model must follow, said at length " * 5 for i in range(90)]
+BUSY_INDEX = "\n".join(
+    [f"# kb index 2026-10-22 ({SCOPE}) — generated, do not edit", "", "## Pinned", *BUSY_PINNED, "", "## Recent", *RECENT]
+)
+BUSY_TASKS = [{"id": i, "level": 4 if i < 5 else 3, "title": f"busy task {i} " * 8} for i in range(60)]
+BUSY_SYNC = "\n".join(
+    f"possible duplicate: [{i}] a new ticket title ~ [{i + 1}] an old thread title: kb promote {i + 1} KIO-{i}, then kb merge {i} {i + 1}"
+    for i in range(12)
+)
+NO_SUMMARY = [{"id": i, "slug": f"2026-10-2{i}-1", "session_id": f"sid-{i}", "closed_at": None} for i in range(5)]
 
 # The stub: answers from the KB_STUB_* environment and logs every call, one JSON argv a line.
 STUB = r'''#!/usr/bin/env python3
@@ -73,7 +90,14 @@ if args[:2] == ["scope", "which"]:
 if args[:2] == ["service", "start"]:
     sys.exit(1 if env("KB_STUB_START_FAILS") else 0)
 if args[:2] == ["sync", "odoo"]:
-    print("odoo: 9 open tasks, 0 new, 0 updated, 0 closed")
+    print(env("KB_STUB_SYNC", "odoo: 9 open tasks, 0 new, 0 updated, 0 closed"))
+    sys.exit(0)
+if args[:2] == ["--json", "notices"]:
+    if env("KB_STUB_OLD"):
+        print("Usage: kb [OPTIONS] COMMAND [ARGS]...\nTry 'kb --help' for help.\n\nError: No such command 'notices'.", file=sys.stderr)
+        sys.exit(2)
+    count = int(env("KB_STUB_NOTICES", "0"))
+    print(json.dumps({"scope": "acme-odoo-16", "count": count, "ids": list(range(count))}))
     sys.exit(0)
 if args[:2] == ["session", "open"]:
     if any(a.startswith("--title") for a in args) and env("KB_STUB_OLD"):
@@ -84,11 +108,12 @@ if args[:2] == ["session", "open"]:
 if args[:1] == ["index"]:
     sys.stdout.write(open(env("KB_STUB_INDEX")).read() + "\n")
     sys.exit(0)
-if args[:1] == ["today"]:
-    if "--json" in args:
-        print(json.dumps({"date": "2026-10-22", "scope": "x", "tasks": json.loads(env("KB_STUB_TASKS"))}))
+if args[:1] == ["today"] and "--json" in args:
+    if env("KB_STUB_TODAY_ERROR"):
+        print(json.dumps({"error": "neo4j went away", "tasks": []}))
     else:
-        print(env("KB_STUB_TODAY"))
+        print(json.dumps({"date": "2026-10-22", "scope": "x", "tasks": json.loads(env("KB_STUB_TASKS")),
+                          "quiet": 2, "no_summary": json.loads(env("KB_STUB_NO_SUMMARY", "[]"))}))
     sys.exit(0)
 print(f"kb: no such command {args!r}", file=sys.stderr)
 sys.exit(2)
@@ -110,7 +135,7 @@ class Rig:
         self.hook.write_text(render())
         self.tools = self.dir / "tools"
         self.tools.mkdir()
-        for tool in ("bash", "python3", "awk", "sed", "grep", "cat", "dirname", "env"):
+        for tool in ("bash", "python3", "awk", "sed", "grep", "cat", "dirname", "env", "seq"):
             found = shutil.which(tool)
             if found is None:
                 sys.exit(f"missing tool: {tool}")
@@ -122,6 +147,7 @@ class Rig:
         kb.chmod(0o755)
         (self.dir / "index.txt").write_text(INDEX)
         (self.dir / "index-no-pins.txt").write_text(INDEX_NO_PINS)
+        (self.dir / "index-busy.txt").write_text(BUSY_INDEX)
 
     def run(self, payload, *, with_kb=True, index="index.txt", status=STATUS_OK, **stub_env):
         log = self.dir / "calls.log"
@@ -132,7 +158,6 @@ class Rig:
             "KB_STUB_LOG": str(log),
             "KB_STUB_INDEX": str(self.dir / index),
             "KB_STUB_STATUS": status if isinstance(status, str) else json.dumps(status),
-            "KB_STUB_TODAY": TODAY_TEXT,
             "KB_STUB_TASKS": json.dumps(TASKS),
             **stub_env,
         }
@@ -169,57 +194,111 @@ def check(name, ok, detail=""):
 def main():
     rig = Rig()
 
-    # a plain session: the whole index and the standup, shown events recorded
+    # a plain session: the pinned rules, the recent records as a count, a standup count
     proc, calls = rig.run(payload())
     out = proc.stdout
     check("plain: exit 0", proc.returncode == 0, proc.stderr)
-    check("plain: whole index", "## Pinned" in out and "## Recent" in out, out[:300])
-    check("plain: the standup list", "[3] L3 task 3" in out)
-    check("plain: today records shown", ["today", "--scope", SCOPE, "--record-shown"] in calls, calls)
+    check("plain: index header", out.splitlines()[2].startswith("# kb index"), out[:300])
+    check("plain: every pinned rule", "## Pinned" in out and all(rule in out for rule in PINNED), out[:300])
+    check("plain: no recent records, their count", "## Recent" not in out and RECENT[0] not in out
+          and RECENT_LINE in out, out[-600:])
+    check("plain: the standup count", STANDUP_LINE in out, out[-400:])
+    check("plain: no standup list", "task 3" not in out)
+    check("plain: nothing recorded as shown", not any("--record-shown" in c for c in calls), calls)
     check("plain: no title, no --title", all(not any(a.startswith("--title") for a in c) for c in opens(calls)), calls)
     check("plain: no compaction note", COMPACT_LINE not in out)
     check("plain: no schema line", SCHEMA_LINE not in out)
+    check("plain: no notices line", NOTICES_ASK not in out)
+    check("plain: nothing left out", LEFT_OUT not in out and CUT_LINE not in out)
+    check(f"plain: under {CONTEXT_CAP} characters", len(out) < CONTEXT_CAP, f"{len(out)} characters")
     check("plain: nothing on stderr", proc.stderr == "", proc.stderr)
+    check("rig: the stub index alone is over the cap, so cutting it means something",
+          len(INDEX) > CONTEXT_CAP, len(INDEX))
 
-    # a titled session that is no child: the title is stored, the output is the whole one
+    # a titled session: the title is stored; a "[child] " title changes nothing else
     proc, calls = rig.run(payload(title="Fix the  label\nprinter"))
     check("titled: title passed, whitespace folded",
           opens(calls) == [["session", "open", "--scope", SCOPE, "--id", "sess-1", "--source", "startup",
                             "--title=Fix the label printer"]], calls)
-    check("titled: whole index", "## Recent" in proc.stdout)
-
-    # a child: the pinned section and one standup line, under the context cap
+    check("titled: the same output", proc.stdout == out, proc.stdout[:300])
     proc, calls = rig.run(payload(title="[child] ACME-12 label printer"))
-    out = proc.stdout
-    check("child: exit 0", proc.returncode == 0, proc.stderr)
-    check("child: pinned rules kept", "## Pinned" in out and PINNED[-1] in out, out[:300])
-    check("child: index header kept", out.splitlines()[2].startswith("# kb index"), out[:300])
-    check("child: no recent records", "## Recent" not in out and RECENT[0] not in out)
-    check("child: the standup count", STANDUP_LINE in out, out[-400:])
-    check("child: no standup list", "[3] L3 task 3" not in out)
-    check("child: today not recorded as shown", not any("--record-shown" in c for c in calls), calls)
     check("child: title stored", any("--title=[child] ACME-12 label printer" in c for c in opens(calls)), calls)
-    check(f"child: under {CONTEXT_CAP} characters", len(out) < CONTEXT_CAP, f"{len(out)} characters")
-    full = rig.run(payload())[0].stdout
-    check("rig: the whole output is over the cap, so the child case means something", len(full) > CONTEXT_CAP, len(full))
+    check("child: the same output as any session", proc.stdout == out, proc.stdout[:300])
 
-    # "[child]" only as a prefix with its space marks a child
-    for title in ("child task", "[child]no-space", "x [child] y", "[Child] upper"):
-        proc, _ = rig.run(payload(title=title))
-        check(f"not a child: {title!r}", "## Recent" in proc.stdout)
+    # notices: a count line that asks first and names kb notices show, ahead of the index
+    for count, words in ((1, "kb: 1 notice waits for the user."), (3, "kb: 3 notices wait for the user.")):
+        proc, calls = rig.run(payload(), KB_STUB_NOTICES=str(count))
+        out_n = proc.stdout
+        line = next((ln for ln in out_n.splitlines() if NOTICES_ASK in ln), "")
+        check(f"notices {count}: the line", line.startswith(words) and f"kb notices show --scope {SCOPE}" in line
+              and "never run it yourself" in line, out_n[:500])
+        check(f"notices {count}: before the index, inside the preview",
+              0 <= out_n.find(NOTICES_ASK) < min(out_n.find("# kb index"), PREVIEW), out_n[:500])
+        check(f"notices {count}: counted, never shown", ["--json", "notices", "--scope", SCOPE] in calls
+              and not any("show" in c for c in calls if c[1:2] == ["notices"]), calls)
 
-    # a child whose kb prints no Pinned section gets the whole index (the agreed fallback)
-    proc, _ = rig.run(payload(title="[child] ACME-12"), index="index-no-pins.txt")
-    check("child, no pins: whole index", RECENT[2] in proc.stdout, proc.stdout[:300])
+    # sessions closed without a summary: one line naming kb session close
+    proc, _ = rig.run(payload(), KB_STUB_NO_SUMMARY=json.dumps(NO_SUMMARY[:1]))
+    check("one session without summary: its id", "kb: 1 session without summary: 2026-10-20-1; write them: "
+          "kb session close --id sid-0 --body-file <f>" in proc.stdout, proc.stdout[-400:])
+    proc, _ = rig.run(payload(), KB_STUB_NO_SUMMARY=json.dumps(NO_SUMMARY))
+    check("five sessions without summary: three named", "kb: 5 sessions without summary: 2026-10-20-1, 2026-10-21-1, "
+          "2026-10-22-1 and 2 more; write them: kb session close --id <session_id>" in proc.stdout, proc.stdout[-400:])
 
-    # an older kb: --title refused with a usage error, the session opens without it, nothing leaks
+    # a kb that cannot answer the standup gives no count line, and no error
+    proc, _ = rig.run(payload(), KB_STUB_TODAY_ERROR="1")
+    check("today error: no count line", "kb today:" not in proc.stdout, proc.stdout[-300:])
+    check("today error: index still printed", "## Pinned" in proc.stdout)
+
+    # a kb that prints no Pinned section: the header and the recent count
+    proc, _ = rig.run(payload(), index="index-no-pins.txt")
+    check("no pins: header and the recent count",
+          "# kb index" in proc.stdout and "3 recent records are left out here" in proc.stdout
+          and RECENT[2] not in proc.stdout, proc.stdout[:400])
+
+    # a busy kb: the last pinned rules give way, everything else stays, under the cap
+    local = rig.hook.with_name("kb-session-start.local.sh")
+    local.write_text('#!/usr/bin/env bash\necho "local: $1 $2"\n')
+    local.chmod(0o755)
+    proc, calls = rig.run(payload(source="compact", title="[child] ACME-12"), index="index-busy.txt",
+                          KB_STUB_TASKS=json.dumps(BUSY_TASKS), KB_STUB_SYNC=BUSY_SYNC, KB_STUB_NOTICES="2",
+                          KB_STUB_NO_SUMMARY=json.dumps(NO_SUMMARY), KB_STUB_SCOPE="none",
+                          KB_STUB_STATUS=json.dumps({**STATUS_OK, "schema_stale": ["record_text"]}))
+    out = proc.stdout
+    kept = [rule for rule in BUSY_PINNED if rule in out]
+    check("busy: exit 0, nothing on stderr", proc.returncode == 0 and proc.stderr == "", proc.stderr)
+    check(f"busy: under {CONTEXT_CAP} characters", len(out) < CONTEXT_CAP, f"{len(out)} characters")
+    check(f"busy: under {CONTEXT_CAP} UTF-16 units", len(out.encode("utf-16-le")) // 2 < CONTEXT_CAP)
+    check("rig: the busy output is far over the cap untrimmed", len(BUSY_INDEX) > 2 * CONTEXT_CAP, len(BUSY_INDEX))
+    check("busy: the first pinned rules kept, in order", kept == BUSY_PINNED[:len(kept)] and len(kept) >= 20, len(kept))
+    check("busy: the left-out line counts the rest",
+          f"+{len(BUSY_PINNED) - len(kept)} {LEFT_OUT}" in out, out[-1500:])
+    check("busy: compaction note first", out.splitlines()[0].startswith(COMPACT_LINE), out[:300])
+    for name, needle in (("register line", REGISTER_LINE), ("schema line", SCHEMA_LINE), ("notices line", NOTICES_ASK)):
+        check(f"busy: {name} inside the preview", 0 <= out.find(needle) < PREVIEW, out[:PREVIEW])
+    check("busy: the standup count", "kb today: 60 open tasks, 60 loud, 2 quiet" in out, out[-600:])
+    check("busy: the sessions line", "kb: 5 sessions without summary" in out, out[-600:])
+    check("busy: the local extras", out.rstrip().endswith("local: compact sess-1"), out[-300:])
+    check("busy: no cut", CUT_LINE not in out)
+
+    # local extras that print more than the whole budget: cut at a line, said so, still under the cap
+    local.write_text('#!/usr/bin/env bash\nfor i in $(seq 400); do echo "local: a chatty extra line number $i"; done\n')
+    proc, _ = rig.run(payload(source="compact"), index="index-busy.txt", KB_STUB_NOTICES="2")
+    out = proc.stdout
+    check(f"flood: under {CONTEXT_CAP} characters", len(out) < CONTEXT_CAP, f"{len(out)} characters")
+    check("flood: ends with the cut line", out.rstrip().endswith(CUT_LINE), out[-300:])
+    check("flood: what comes first is kept", out.splitlines()[0].startswith(COMPACT_LINE) and NOTICES_ASK in out)
+    local.unlink()
+
+    # an older kb: --title refused with a usage error, no notices command; nothing leaks
     proc, calls = rig.run(payload(title="[child] ACME-12 label printer"), KB_STUB_OLD="1")
     out = proc.stdout
     check("old kb: retried without --title",
           [c for c in opens(calls) if not any(a.startswith("--title") for a in c)] != [], calls)
     check("old kb: session line printed once", out.count("kb: session [42]") == 1, out[:400])
-    check("old kb: no usage error in context", "No such option" not in out and "Usage:" not in out, out[:400])
-    check("old kb: still a slim child", "## Recent" not in out and STANDUP_LINE in out)
+    check("old kb: no usage error in context", "No such" not in out and "Usage:" not in out, out[:400])
+    check("old kb: no notices line", NOTICES_ASK not in out)
+    check("old kb: pinned rules and the standup count", PINNED[-1] in out and STANDUP_LINE in out)
 
     # compaction: the note instruction comes first, inside the preview
     proc, _ = rig.run(payload(source="compact"))

@@ -23,7 +23,8 @@ only on the user's command, and closes the ticket and the kb task.
   `session_title` and prints the pinned rules and a one-line standup count, about 7 KB instead
   of about 31 KB, which is over the 10,000 characters Claude Code keeps of a hook's output.
   If the app does not fill `session_title` for a session it starts, a child gets the full
-  output: that fallback was agreed.
+  output: that fallback was agreed. **Superseded by [0002](0002-the-kb-session-start-fits-the-hook-limit.md)**:
+  the app passes no `session_title` at all, and every session now gets the slim output.
 - **No session tool, one session**: in terminal `claude`, in Antigravity or for a teammate
   without the desktop app, the whole pipeline runs in one session, as before, and says so.
 
