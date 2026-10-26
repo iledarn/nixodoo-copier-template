@@ -452,9 +452,14 @@ Before spawning any subagent:
 {% endif %}
 {% if use_kb %}
    - **What kb knows** about the task's areas: `kb context <WIP_ID>`, as the `odoo-tickets`
-     start-work flow runs it (an untagged record is tagged first). Its knowledge records
-     feed the grill and the brief; read a body with `kb show <id>` only when its line
-     matters to this task.
+     start-work flow runs it (an untagged record is tagged first). Read the body of every
+     knowledge record it lists, `kb show <id>`, before the grill and the brief: a line is
+     the record's title, what binds the task is in its body.
+   - **A tag change runs it again.** Every change to the area tags of the run's record or of
+     a block task's record (`kb edit <id> --tag <area>`) is followed at once by
+     `kb context <id>` and `kb show` of each knowledge record the new list adds. After a
+     child has started, those records go to it with `SendMessage`, and
+     `kb append <WIP_ID> "rules [<ids>] sent to child <session id>"`.
 {% endif %}
 
 1. **Take the ticket into work** (start-work flow from `odoo-tickets`) —
@@ -641,6 +646,11 @@ Before spawning any subagent:
    Before the grill, what kb knows about the task's areas: `kb context <WIP_ID>`. Exit 4
    means the record has no area tag: `kb edit <WIP_ID> --tag <area>` (`kb tags` lists the
    areas), then again. A kb that has no `context` command yet: say so in one line and go on.
+   Read the body of every knowledge record it lists, `kb show <id>`, before the grill and the
+   brief. Every later change to the area tags of the run's record or of a block task's
+   record is followed at once by `kb context <id>` and `kb show` of each knowledge record
+   the new list adds. After a child has started, those records go to it with `SendMessage`,
+   and `kb append <WIP_ID> "rules [<ids>] sent to child <session id>"`.
 {% endif %}
 {% if status_mcp == 'teams' %}
 
@@ -708,8 +718,15 @@ conversation:
     <the confirmed Alignment Summary verbatim, or "Mechanical: grill skipped, <why>">
 
     ## Rules
+{% if use_kb %}
+    - [<id>] <one line: what the record's body requires of this task>
+    (each knowledge record of the latest `kb context` of each task's record and each pinned
+    rule whose body bears on the task; written from the bodies read in Phase 1, step 0,
+    never from the lines)
+{% else %}
     - [<id>] <one line: what the record means for this task>
     (each knowledge record from `kb context` and each pinned rule that bears on the task)
+{% endif %}
 
     ## Acceptance and test cases
     <the acceptance bar in one to three lines>; <N> test cases ({% if tickets_mcp == 'odoo' %}{% if task_software_fields %}the ticket's Test Cases tab{% else %}the ticket's Test Cases note{% endif %}{% else %}the Phase-1 requirements{% endif %}):
@@ -744,7 +761,8 @@ the ticket as a `Design Decision` note, reply to the child with `SendMessage`. W
 {% else %}
 the run's record, reply to the child with `SendMessage`. What the user
 {% endif %}
-says about the task in the mother goes to the child the same way.
+says about the task in the mother goes to the child the same way{% if use_kb %}, and so do the knowledge
+records a tag change adds to `kb context` (Phase 1, step 0){% endif %}.
 
 **After a child's report**, the mother:
 
