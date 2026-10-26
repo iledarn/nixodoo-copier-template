@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
-# SessionStart hook: kb's pinned rules, a one-line standup and the count of waiting notices go
-# into the session context. stdout is context for Claude, not shown to the user. Without kb on
-# PATH, or with this checkout not registered as its kb scope, it says so in one line that names
-# the fix (nix run .#kb-setup). Never exits non-zero: a session must always start.
+# SessionStart hook: kb's pinned rules and a one-line standup go into the session context.
+# stdout is context for Claude, not shown to the user. Without kb on PATH, or with this
+# checkout not registered as its kb scope, it says so in one line that names the fix (nix run
+# .#kb-setup). Never exits non-zero: a session must always start.
 #
 # Claude Code keeps at most 10,000 characters of a hook's output in context; past that the
 # model gets a path and the first 2,000 characters. So the start carries the index header and
-# its Pinned section (kb index lists the recent records), one count line for the standup (kb
-# today prints the list, the kb band shows it; nothing is recorded as shown) and one for the
-# notices, and whatever the model must act on (the compaction note, a stale schema, NO MEMORY,
-# waiting notices) prints first. FIT then holds the whole output under BUDGET characters: past
-# it the last pinned rules give way to a line naming kb index, then the end of the output to a
-# line saying it was cut. Every session gets the same output, a pipeline child included.
+# its Pinned section (kb index lists the recent records) and one count line for the standup (kb
+# today prints the list, the kb band shows it; nothing is recorded as shown), and whatever the
+# model must act on (the compaction note, a stale schema, NO MEMORY) prints first. FIT then
+# holds the whole output under BUDGET characters: past it the last pinned rules give way to a
+# line naming kb index, then the end of the output to a line saying it was cut. Every session
+# gets the same output, a pipeline child included. Notices (kb add --once) are the user's and
+# live in the kb pane: the start never names them.
 #
-# The installed kb may predate --title, schema_stale, notices or anything newer: each is tried,
-# and a kb that does not know it gets the old call or nothing, so no error ever reaches the
-# context.
+# The installed kb may predate --title, schema_stale or anything newer: each is tried, and a kb
+# that does not know it gets the old call or nothing, so no error ever reaches the context.
 set -u
 # characters as Claude Code counts them, with room under its 10,000 for what it adds
 BUDGET=9500
@@ -70,7 +70,7 @@ context() {
     # This checkout must be the kb scope "$SCOPE", or records made here land in another scope
     # and .kb/tags.toml is never read. `kb scope which` exits 3 for a path in no scope; a kb
     # from before `kb scope` fails another way, and then nothing is said.
-    local registered rc status stale opened count what
+    local registered rc status stale opened
     registered=$(kb scope which "$ROOT" 2>/dev/null)
     rc=$?
     if [ "$rc" -eq 3 ] || { [ "$rc" -eq 0 ] && [ "$registered" != "$SCOPE" ]; }; then
@@ -104,17 +104,6 @@ context() {
     fi
     [ "$rc" -eq 2 ] && opened=$(open_session)
     [ -n "$opened" ] && printf '%s\n' "$opened" | sed "s/^/kb: session /"
-
-    # Notices (kb add --once) are for the user, who would miss them in the kb band: the model
-    # hands them the command, and its output goes to their terminal, never into this context.
-    # A kb from before `kb notices` gives no count, and nothing is said.
-    count=$(json_field "$(kb --json notices --scope "$SCOPE" 2>/dev/null)" count)
-    case "$count" in
-        "" | 0) what="" ;;
-        1) what="1 notice waits" ;;
-        *) what="$count notices wait" ;;
-    esac
-    [ -n "$what" ] && echo "kb: $what for the user. In your first reply tell them, and give them this command in its own bash block to run themselves: kb notices show --scope $SCOPE (it prints the notices and closes them); never run it yourself."
 
     # The index: its header and the Pinned section; the other records only as a count.
     kb index --scope "$SCOPE" 2>/dev/null | awk '

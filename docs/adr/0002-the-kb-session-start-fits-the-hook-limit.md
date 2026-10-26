@@ -20,6 +20,9 @@ Mark chose what the start carries, the same for every session:
 - **Notices** (`kb add --once`) **as a count**: the model tells the user and hands them
   `kb notices show` to run in their own terminal. The notices close when it prints them, and
   their text never enters the model's context. Shown only in the kb band, Mark would miss them.
+  **Superseded by kb record [1227]** (Mark, 2026-10-26): notices live only in the kb pane, with
+  a dismiss button and a count in the band; the session start prints no notices line and never
+  calls `kb notices`, and `kb notices show` no longer closes them.
 - **No child mode**: one output fits every session.
 
 The sessions closed without a summary keep their one line: an instruction to the model, not
@@ -44,5 +47,6 @@ model must act on prints first, so it is kept longest. Measured with the real kb
 
 - `kb today --record-shown` no longer runs at the session start, so a `--once` task is closed
   by `kb notices show` (kb PR okolovmark/kb#7). A kb from before `kb notices` prints no
-  count: its notices wait until kb is upgraded.
+  count: its notices wait until kb is upgraded. **Superseded by kb record [1227]**: a notice
+  closes by `kb notices dismiss`, the kb pane's dismiss button.
 - A model that needs the standup list or a recent record runs `kb today` or `kb index`.

@@ -80,12 +80,12 @@ With `use_kb = false` a generated project carries a markdown memory seed under
 
 With `use_kb = true` the seed is not generated at all. Memory lives in
 [kb](https://github.com/okolovmark/kb) instead, and the SessionStart and SessionEnd hooks
-open the session record, print the pinned rules, a standup count and the count of waiting
-notices, all under the 10,000 characters Claude Code keeps of a hook's output, and close the
-session. A compacted session is asked for its session note first, and a stale kb schema is
-named. `.kb/tags.toml` seeds the
-project's kb area vocabulary once, with the areas of the tooling the project has; the project
-owns it from then on.
+open the session record, print the pinned rules and a standup count, under the 10,000
+characters Claude Code keeps of a hook's output, and close the session. A compacted session is
+asked for its session note first, and a stale kb schema is named. Notices (`kb add --once`) are
+the user's: they show in the kb pane and never reach the model's context. `.kb/tags.toml`
+seeds the project's kb area vocabulary once, with the areas of the tooling the project has; the
+project owns it from then on.
 `CLAUDE.md` gets a "Memory: kb" section, so the instructions live in the repository rather
 than in Claude Code's per-user `MEMORY.md`; turn auto-memory off locally
 (`autoMemoryEnabled: false` in `.claude/settings.local.json`) so the harness stops asking for
