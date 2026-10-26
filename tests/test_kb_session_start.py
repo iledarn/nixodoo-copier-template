@@ -3,12 +3,12 @@
 
 Renders the hook with jinja2 and runs it with a stub `kb` on a PATH of its own, so the
 real kb and its database are never touched. Covers what the hook must do with a current
-kb and with an older one that predates --title, schema_stale, notices or anything newer:
-every session gets the pinned rules, a standup count and the count of waiting notices,
-under the 10,000 characters Claude Code keeps of a hook's output however busy kb is; a
-compacted session is told to write its session note first, a stale schema says so, a
-missing kb or an unregistered checkout gets one line naming `nix run .#kb-setup`, and no kb
-error ever reaches the context.
+kb and with an older one that predates --title, schema_stale or anything newer: every
+session gets the pinned rules and a standup count, under the 10,000 characters Claude Code
+keeps of a hook's output however busy kb is; notices (kb add --once) live in the kb pane, so
+the hook never asks kb for them and never names them; a compacted session is told to write
+its session note first, a stale schema says so, a missing kb or an unregistered checkout gets
+one line naming `nix run .#kb-setup`, and no kb error ever reaches the context.
 
 Run from the repo root: python3 tests/test_kb_session_start.py (needs jinja2, bash,
 python3, awk, sed, grep).
@@ -50,7 +50,6 @@ INSTALL_LINE = "kb: kb is not installed, so this session has no project memory. 
 REGISTER_LINE = "kb: this checkout is not registered as the kb scope"
 STANDUP_LINE = "kb today: 9 open tasks, 4 loud, 2 quiet; the list is left out here: kb today prints it."
 RECENT_LINE = "120 recent records are left out here: kb index lists them, kb search finds any record."
-NOTICES_ASK = "In your first reply tell them, and give them this command in its own bash block to run themselves"
 LEFT_OUT = "pinned rules left out to fit the context: kb index lists them"
 CUT_LINE = "kb: the session start was cut here to fit the context; kb index and kb today print the rest"
 
@@ -68,6 +67,7 @@ BUSY_SYNC = "\n".join(
 NO_SUMMARY = [{"id": i, "slug": f"2026-10-2{i}-1", "session_id": f"sid-{i}", "closed_at": None} for i in range(5)]
 
 # The stub: answers from the KB_STUB_* environment and logs every call, one JSON argv a line.
+# It answers `kb --json notices` as a current kb does, so a hook that asked would get a count.
 STUB = r'''#!/usr/bin/env python3
 import json, os, sys
 args = sys.argv[1:]
@@ -174,6 +174,11 @@ def opens(calls):
     return [c for c in calls if c[:2] == ["session", "open"]]
 
 
+def no_notices(out, calls):
+    """Notices live in the kb pane: kb is never asked for them and the output never names them."""
+    return "notice" not in out.lower() and not any("notices" in c for c in calls)
+
+
 def payload(source="startup", title=None):
     d = {"session_id": "sess-1", "source": source, "hook_event_name": "SessionStart"}
     if title is not None:
@@ -208,7 +213,7 @@ def main():
     check("plain: no title, no --title", all(not any(a.startswith("--title") for a in c) for c in opens(calls)), calls)
     check("plain: no compaction note", COMPACT_LINE not in out)
     check("plain: no schema line", SCHEMA_LINE not in out)
-    check("plain: no notices line", NOTICES_ASK not in out)
+    check("plain: no notices line, kb notices never called", no_notices(out, calls), calls)
     check("plain: nothing left out", LEFT_OUT not in out and CUT_LINE not in out)
     check(f"plain: under {CONTEXT_CAP} characters", len(out) < CONTEXT_CAP, f"{len(out)} characters")
     check("plain: nothing on stderr", proc.stderr == "", proc.stderr)
@@ -225,17 +230,11 @@ def main():
     check("child: title stored", any("--title=[child] ACME-12 label printer" in c for c in opens(calls)), calls)
     check("child: the same output as any session", proc.stdout == out, proc.stdout[:300])
 
-    # notices: a count line that asks first and names kb notices show, ahead of the index
-    for count, words in ((1, "kb: 1 notice waits for the user."), (3, "kb: 3 notices wait for the user.")):
+    # notices waiting: they live in the kb pane, so no line, kb notices never called, the same output
+    for count in (1, 3):
         proc, calls = rig.run(payload(), KB_STUB_NOTICES=str(count))
-        out_n = proc.stdout
-        line = next((ln for ln in out_n.splitlines() if NOTICES_ASK in ln), "")
-        check(f"notices {count}: the line", line.startswith(words) and f"kb notices show --scope {SCOPE}" in line
-              and "never run it yourself" in line, out_n[:500])
-        check(f"notices {count}: before the index, inside the preview",
-              0 <= out_n.find(NOTICES_ASK) < min(out_n.find("# kb index"), PREVIEW), out_n[:500])
-        check(f"notices {count}: counted, never shown", ["--json", "notices", "--scope", SCOPE] in calls
-              and not any("show" in c for c in calls if c[1:2] == ["notices"]), calls)
+        check(f"notices {count}: no notices line, kb notices never called", no_notices(proc.stdout, calls), calls)
+        check(f"notices {count}: the same output as without", proc.stdout == out, proc.stdout[:500])
 
     # sessions closed without a summary: one line naming kb session close
     proc, _ = rig.run(payload(), KB_STUB_NO_SUMMARY=json.dumps(NO_SUMMARY[:1]))
@@ -274,8 +273,9 @@ def main():
     check("busy: the left-out line counts the rest",
           f"+{len(BUSY_PINNED) - len(kept)} {LEFT_OUT}" in out, out[-1500:])
     check("busy: compaction note first", out.splitlines()[0].startswith(COMPACT_LINE), out[:300])
-    for name, needle in (("register line", REGISTER_LINE), ("schema line", SCHEMA_LINE), ("notices line", NOTICES_ASK)):
+    for name, needle in (("register line", REGISTER_LINE), ("schema line", SCHEMA_LINE)):
         check(f"busy: {name} inside the preview", 0 <= out.find(needle) < PREVIEW, out[:PREVIEW])
+    check("busy: no notices line, kb notices never called", no_notices(out, calls), calls)
     check("busy: the standup count", "kb today: 60 open tasks, 60 loud, 2 quiet" in out, out[-600:])
     check("busy: the sessions line", "kb: 5 sessions without summary" in out, out[-600:])
     check("busy: the local extras", out.rstrip().endswith("local: compact sess-1"), out[-300:])
@@ -283,21 +283,22 @@ def main():
 
     # local extras that print more than the whole budget: cut at a line, said so, still under the cap
     local.write_text('#!/usr/bin/env bash\nfor i in $(seq 400); do echo "local: a chatty extra line number $i"; done\n')
-    proc, _ = rig.run(payload(source="compact"), index="index-busy.txt", KB_STUB_NOTICES="2")
+    proc, calls = rig.run(payload(source="compact"), index="index-busy.txt", KB_STUB_NOTICES="2")
     out = proc.stdout
     check(f"flood: under {CONTEXT_CAP} characters", len(out) < CONTEXT_CAP, f"{len(out)} characters")
     check("flood: ends with the cut line", out.rstrip().endswith(CUT_LINE), out[-300:])
-    check("flood: what comes first is kept", out.splitlines()[0].startswith(COMPACT_LINE) and NOTICES_ASK in out)
+    check("flood: what comes first is kept", out.splitlines()[0].startswith(COMPACT_LINE) and "## Pinned" in out)
+    check("flood: no notices line, kb notices never called", no_notices(out, calls), calls)
     local.unlink()
 
-    # an older kb: --title refused with a usage error, no notices command; nothing leaks
+    # an older kb: --title refused with a usage error; nothing leaks
     proc, calls = rig.run(payload(title="[child] ACME-12 label printer"), KB_STUB_OLD="1")
     out = proc.stdout
     check("old kb: retried without --title",
           [c for c in opens(calls) if not any(a.startswith("--title") for a in c)] != [], calls)
     check("old kb: session line printed once", out.count("kb: session [42]") == 1, out[:400])
     check("old kb: no usage error in context", "No such" not in out and "Usage:" not in out, out[:400])
-    check("old kb: no notices line", NOTICES_ASK not in out)
+    check("old kb: no notices line, kb notices never called", no_notices(out, calls), calls)
     check("old kb: pinned rules and the standup count", PINNED[-1] in out and STANDUP_LINE in out)
 
     # compaction: the note instruction comes first, inside the preview
