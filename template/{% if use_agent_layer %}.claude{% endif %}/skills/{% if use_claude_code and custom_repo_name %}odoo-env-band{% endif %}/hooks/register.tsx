@@ -256,7 +256,7 @@ export const register: Register = on => {
       </Box>
     )
     return (
-      <Box flexDirection="column">
+      <Box flexDirection="column" rowGap="sm">
         {below}
         {row}
       </Box>
