@@ -72,7 +72,6 @@ function engine(
   on('agent.list', () => ({
     value: agents.map(agent => ({ ...agent, description: '', status: 'completed' })),
   }))
-  on('skill.prompt', (_$, e) => ({ text: e.text }))
   on('turn.complete', () => ({ text: '' }))
   on('prompt.submit', (_$, e) => ({ text: e.text }))
   on('tool.call', (_$, e) => {
@@ -273,7 +272,9 @@ describe('rules', () => {
 test('the dev agent and worktree edits wait for the Teams status and your grill press', async ($, on) => {
   engine(on)
   await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
-  await $.skill.prompt({ skill: 'pipeline', text: 'Odoo Development Pipeline' })
+  // typed /pipeline starts the run: skill.prompt never reaches a person's plugin under cc-plugin-sec-default
+  await $.prompt.submit({ text: `/pipeline ${K}-9`, command: { name: 'pipeline', args: `${K}-9` }, wait: false, origin: { kind: 'composer' } })
+  expect(String((await $.tool.call({ tool: 'mcp__pipeline-gates__gates' })).result)).toContain(`${K}-9`)
 
   const dev = { tool: 'Agent', description: 'dev', prompt: 'build it', subagent_type: 'dev' } as const
   const blocked = await $.tool.call(dev)

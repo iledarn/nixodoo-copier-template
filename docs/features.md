@@ -56,9 +56,7 @@ The full inventory behind the summary in [the README](../README.md#what-it-gener
   (`.claude/skills/settings-sync/baseline/`) and the project's own (`.claude/settings-sync/`, written
   by its maintainer's `sync.py save`), with machine paths and claude.ai connector ids filled in;
   **deploy-watch**, the deploy skill's T+60 re-check as a timer that survives a restart,
-  with a countdown, run-now and cancel; **redact-secrets**, passwords, tokens, keys and URL
-  credentials masked in tool output before the model reads it and before the transcript
-  stores it, `/redact off` taken only from the person; **pipeline-gates** (with the pipeline), the pipeline's gates as code: no `dev`
+  with a countdown, run-now and cancel; **pipeline-gates** (with the pipeline), the pipeline's gates as code: no `dev`
   agent and no worktree edit before the Teams status and the user's grill press, no
   `gh pr create` before a QC pass that rests on a review and a green test run, with a phase pane;
   a step that waits on the grill press pushes to the phone and asks in a dialog (Confirm /
