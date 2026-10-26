@@ -99,3 +99,37 @@ test('only the person turns masking off; anyone turns it back on', async ($, on)
   expect(onByPlugin.text).toContain('redact: on;')
   expect((await $.tool.call({ tool: 'Bash', command: 'env' })).ref).toBeUndefined()
 })
+
+test('rows the built-in sec-default sends past person-installed plugins are not hooked', async ($, on) => {
+  mock.clock(on)
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('command.register', (_$, e) => ({ value: { command: e.name } }))
+  on('ui.toast', () => ({ value: undefined }))
+  await $.session.start({ cwd: '/p', surface: 'terminal', isInteractive: true })
+
+  const rows = [
+    ['tool-result', { kind: 'tool', tool: 'Bash' }],
+    ['tool-message', { kind: 'tool', tool: 'Read' }],
+    ['tool-message', { kind: 'tool', tool: 'Skill' }],
+    ['hook-context', { kind: 'tool', tool: 'Bash' }],
+    ['attachment', { kind: 'tool', tool: 'Read' }],
+  ] as const
+  const texts: string[] = []
+  for (const [door, origin] of rows) {
+    const stored = await $.session.append({
+      door,
+      origin,
+      uuid: `${door}-${origin.tool}`,
+      message: { type: 'user', role: 'user', isMeta: true, content: [{ type: 'text', text: 'X_TOKEN=abcdef123' }] },
+    })
+    const block = stored.message?.content[0]
+    texts.push(block?.type === 'text' ? String(block.text) : '')
+  }
+  expect(texts).toEqual([
+    `X_TOKEN=${MASK}`,
+    `X_TOKEN=${MASK}`,
+    'X_TOKEN=abcdef123',
+    'X_TOKEN=abcdef123',
+    'X_TOKEN=abcdef123',
+  ])
+})

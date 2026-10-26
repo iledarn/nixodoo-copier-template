@@ -3,8 +3,14 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import { redactText, redactValue } from './redact'
 
-// rows that reach the model and the transcript besides a tool's own result
-const DOORS = new Set(['tool-result', 'tool-message', 'hook-context', 'attachment'])
+// rows that reach the model and the transcript besides a tool's own result. Claude Code's built-in
+// cc-plugin-sec-default, outermost for Team and Enterprise organizations, sends hook-context, attachment
+// and the Skill tool's tool-message rows past every plugin a person installs: those stay unmasked, and a
+// hook on them would only raise a "hook was skipped" notice
+const DOORS = [
+  { door: 'tool-result' },
+  { door: 'tool-message', origin: [{ kind: /^(?!tool$)/ }, { tool: /^(?!Skill$)/ }] },
+] as const
 // the person's own input: the prompt box, the desktop bridge, an SDK host; never a plugin, a schedule,
 // a task notification or another session
 const PERSON_ORIGINS = new Set(['composer', 'bridge', 'sdk'])
@@ -72,11 +78,13 @@ export const register: Register = on => {
     return ran.context === undefined ? { result: done.value } : { result: done.value, context: ran.context }
   })
 
-  on('session.append', async ($, e, next) => {
-    if (!DOORS.has(e.door) || (await read($, isOff))) return next(e)
-    const done = redactBlocks(e.message.content as readonly Block[])
-    if (done.count === 0) return next(e)
-    await counted($, done.count, e.door)
-    return next({ ...e, message: { ...e.message, content: done.blocks as typeof e.message.content } })
-  })
+  for (const doors of DOORS) {
+    on('session.append', doors, async ($, e, next) => {
+      if (await read($, isOff)) return next(e)
+      const done = redactBlocks(e.message.content as readonly Block[])
+      if (done.count === 0) return next(e)
+      await counted($, done.count, e.door)
+      return next({ ...e, message: { ...e.message, content: done.blocks as typeof e.message.content } })
+    })
+  }
 }
