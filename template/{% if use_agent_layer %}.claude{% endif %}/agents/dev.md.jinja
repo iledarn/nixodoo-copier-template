@@ -92,6 +92,10 @@ tests, security (ACL/record rules), and error handling are never on it.
 - Every new model needs security files (ACL + record rules).
 - When modifying existing modules, check `__manifest__.py` dependencies and data file order.
 - Reference line numbers and file paths when discussing existing code.
+- A red test is fixed in the code under test. Never turn it green by deleting, skipping or
+  commenting out a test, loosening an assertion, moving its fixture off the failing path, or
+  changing its expected value to the new output. Only where the brief says that behaviour changes
+  on purpose is the test edited, and each such edit goes in `DECISIONS`.
 
 ## Token economy
 

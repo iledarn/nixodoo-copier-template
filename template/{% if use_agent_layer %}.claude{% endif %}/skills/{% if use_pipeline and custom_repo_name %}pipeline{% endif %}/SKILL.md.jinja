@@ -868,6 +868,8 @@ subagent (local-diff mode):
 > Do not self-filter; this orchestrator is the ranking/filter stage.
 > For every new or changed test answer the three test-validity questions
 > (reaches the branch / fails on the pre-fix code / assertions can fail).
+> Behaviour this task changes on purpose: <ONE LINE EACH FROM THE ALIGNMENT
+> SUMMARY, or "none">. A weakened existing test outside that list is CRITICAL.
 > Every CRITICAL / MAJOR carries a failure scenario and one VERIFY line —
 > the verification pass runs on those lines.
 > review is read-only; your FILES_CHANGED will be "none (read-only)".
@@ -884,7 +886,9 @@ From round 2 the review gets the round delta, not the whole change again (round-
 > `git -C <WT> add -A && git -C <WT> diff --cached <REVIEWED_TREE>`. Re-check
 > these findings and say for each fixed / still open / regressed: <IDS + ONE
 > LINE EACH>. Report new issues in the delta with severity and confidence;
-> read unchanged code only where a changed line depends on it. Every CRITICAL /
+> a test the reviewed tree had and the delta weakens is CRITICAL unless its
+> behaviour is on the round-1 list: <THAT LIST, or "none">.
+> Read unchanged code only where a changed line depends on it. Every CRITICAL /
 > MAJOR carries a failure scenario and one VERIFY line. Closing block as usual.
 
 **Check 1b — verification pass (Critical / Major only).** For every line of the
@@ -981,6 +985,7 @@ returns no closing block. The fix brief waits for every verdict.
   failed test case: report to the user, spawn a **fresh** `dev` agent to fix — never
   `SendMessage` the previous one (Agent economy). Its brief: `<PROJECT_RULES_BLOB>`,
   the "work in `<WT>`" instruction, the verified findings with their decisive lines,
+  the Check 1 list of behaviour changed on purpose (the only tests it may edit),
   and `git -C <WT> diff --cached --stat <REVIEWED_TREE>` as what earlier rounds
   changed. Append its returns to the running lists, post a `Bug Fix` internal note,
   then **loop back and re-run this whole gate**.

@@ -101,6 +101,14 @@ security / controllers / data / migrations), new dependencies, migrations needed
      (`assertFalse(rec.flag)` when nothing set it True), on a value the fixture
      wrote directly, or after a call that no-ops for that fixture (company
      context — see the shell traps in the `debug` skill) is vacuous.
+- **Weakened tests**: a test that exists before the diff is deleted or
+  commented out, skipped (`unittest.skip*`, `self.skipTest`, a `-standard`
+  tag), its assertion loosened (`assertEqual` → `assertTrue`/`assertIn`, a
+  wider `delta`, a dropped `assertRaises`, a `try`/`except` around it), its
+  fixture moved off the failing path, or its expected value changed to the new
+  output. **Critical** unless the prompt names that behaviour as changed on
+  purpose; then a Minor naming the edit. Failure scenario: the regression the
+  test guarded passes green.
 - **Reuse**: does the diff reimplement a mechanism that already exists in core,
   a pinned OCA repo, or another custom module? A parallel implementation of an
   existing seam is a **Major** finding — cite the existing symbol (same
