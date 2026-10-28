@@ -235,10 +235,15 @@ def the_queue_job_runner_reaches_the_session():
 @case
 def a_test_run_talks_to_ipv4_loopback_with_the_session_db():
     text = render_script(TEST_SRC)
-    run = text[text.index('ODOO=("$HOME/.nix-profile/bin/odoo"'):]
+    assert 'ODOO_BIN="$HOME/.nix-profile/bin/odoo"' in text, text
+    run = text[text.index('ODOO=("$ODOO_BIN"'):]
     for flag in ('-c "$CONF"', "--http-interface 127.0.0.1", '--http-port "$PORT"', '--db-filter "^${DB}\\$"'):
         assert flag in run[:run.index(")\n")], (flag, run)
-    assert 'exec "${ODOO[@]}" "$@"' in run and '"$@" 2>&1 | tee' in run, run
+    assert 'exec "${ODOO[@]}" "$@"' in run and '"$@" <&0 > "$FIFO" 2>&1 &' in run, run
+
+
+# what `odoo server --help` prints, captured from Odoo 16 and 19: wt-test.sh reads its options from it
+SERVER_HELP = {major: pathlib.Path(f"tests/fixtures/odoo-{major}-server-help.txt").resolve() for major in ("16", "19")}
 
 
 def stub(argv_file, body):
@@ -253,12 +258,14 @@ def psql_vars(argv):
     return dict(argv[i + 1].split("=", 1) for i, arg in enumerate(argv or []) if arg == "-v")
 
 
-def wt_test_project(root, odoo_body, missing="", psql_rc=0, psql_body="", python_body="", systemctl_body=""):
+def wt_test_project(root, odoo_body, missing="", psql_rc=0, psql_body="", python_body="", systemctl_body="",
+                    major="16"):
     """Lay out a project at `root` with the rendered wt-test.sh and wt-stop.sh for slug `x`,
     psql, odoo and systemctl stubbed.
 
     The psql stub runs `psql_body`, answers the module-state query with `missing`
-    and exits `psql_rc`; the odoo stub runs `odoo_body`, systemctl `systemctl_body`. With `python_body`, a
+    and exits `psql_rc`; the odoo stub answers `server --help` as Odoo `major` does and
+    otherwise runs `odoo_body`, systemctl `systemctl_body`. With `python_body`, a
     python3 on PATH runs it before the real one. Returns the command of a run and
     its environment.
     """
@@ -270,7 +277,8 @@ def wt_test_project(root, odoo_body, missing="", psql_rc=0, psql_body="", python
         (scripts / src.name.removesuffix(".jinja")).write_text(render_script(src))
     (bin_dir / "psql").write_text(stub(root / "psql.argv", f"{psql_body}cat > /dev/null\n"
                                                            f"printf '%s' {shlex.quote(missing)}\nexit {psql_rc}\n"))
-    (odoo_bin / "odoo").write_text(stub(root / "odoo.argv", odoo_body))
+    (odoo_bin / "odoo").write_text(stub(root / "odoo.argv", odoo_body).replace(
+        "\n", f'\n[ "$*" != "server --help" ] || exec cat {SERVER_HELP[major]}\n', 1))
     (bin_dir / "python3").write_text(f'#!/usr/bin/env bash\n{python_body}exec {shlex.quote(sys.executable)} "$@"\n')
     (bin_dir / "systemctl").write_text(f"#!/usr/bin/env bash\n{systemctl_body}")
     for f in (bin_dir / "psql", odoo_bin / "odoo", bin_dir / "python3", bin_dir / "systemctl"):
@@ -279,17 +287,17 @@ def wt_test_project(root, odoo_body, missing="", psql_rc=0, psql_body="", python
     return ["bash", str(scripts / "wt-test.sh"), "x"], env
 
 
-def run_wt_test(args, missing="", psql_rc=0, odoo_out="", odoo_rc=0):
+def run_wt_test(args, missing="", psql_rc=0, odoo_out="", odoo_rc=0, major="16"):
     """Run the rendered wt-test.sh for slug `x` with psql and odoo stubbed.
 
-    The odoo stub logs `odoo_out` to stderr, as Odoo does, and exits `odoo_rc`.
-    Returns (exit code, stdout+stderr, psql argv, odoo argv), an argv being None
-    when that program did not run.
+    The odoo stub logs `odoo_out` to stderr, as Odoo does, and exits `odoo_rc`; its
+    `server --help` is Odoo `major`'s. Returns (exit code, stdout+stderr, psql argv,
+    odoo argv), an argv being None when that program did not run.
     """
     with tempfile.TemporaryDirectory() as tmp:
         root = pathlib.Path(tmp)
         cmd, env = wt_test_project(root, f'printf "%s\\n" {shlex.quote(odoo_out)} >&2\nexit {odoo_rc}\n',
-                                   missing, psql_rc)
+                                   missing, psql_rc, major=major)
         proc = subprocess.run([*cmd, *args], capture_output=True, text=True, env=env)
         return (proc.returncode, proc.stdout + proc.stderr,
                 read_argv(root / "psql.argv"), read_argv(root / "odoo.argv"))
@@ -340,7 +348,8 @@ def a_second_run_on_the_env_waits_for_the_first():
             cmd, env = wt_test_project(
                 root, f'echo "start $$" >> {events}\nwhile [ ! -e {release} ]; do sleep 0.02; done\n'
                       f'echo "end $$" >> {events}\nprintf "%s\\n" {shlex.quote(RESULT.format(0, 1))} >&2\n',
-                psql_body=f'echo "psql $$" >> {events}\n', python_body=f'echo "port $$" >> {events}\n')
+                psql_body=f'echo "psql $$" >> {events}\n',
+                python_body=f'case "$*" in *socket*) echo "port $$" >> {events} ;; esac\n')
             outs = [root / "holder.out", root / "waiter.out"]
             runs = [start_bg([*cmd, *holder_args], env, outs[0])]
             try:
@@ -605,6 +614,41 @@ def a_symlinked_test_lock_is_taken_by_a_run():
 
 
 @case
+def a_run_wrapped_in_flock_on_a_symlinked_test_lock_runs_under_it():
+    # flock(1) locks what the link points to: compared with the link's own inode the run
+    # did not see its wrapper holding the lock and waited on it forever
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        cmd, env = wt_test_project(root, f'printf "%s\\n" {shlex.quote(RESULT.format(0, 1))} >&2\n')
+        lock = root / ".worktrees/_env/x/test.lock"
+        lock.symlink_to(root / "elsewhere.lock")
+        run = start_bg(["flock", str(lock), *cmd, *TEE_RUN], env, root / "out")
+        finish_bg([run], timeout=20)
+        out = (root / "out").read_text()
+        assert run.returncode == 0 and "running under its lock" in out and "waiting" not in out, out
+
+
+@case
+def the_holder_of_a_symlinked_test_lock_is_named():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        held, release = root / "held", root / "release"
+        cmd, env = wt_test_project(root, f'printf "%s\\n" {shlex.quote(RESULT.format(0, 1))} >&2\n')
+        lock = root / ".worktrees/_env/x/test.lock"
+        lock.symlink_to(root / "elsewhere.lock")
+        procs = [hold_lock(lock, env, root / "holder.out", held, release)]
+        try:
+            wait_for(held.exists, "the hand-run holder")
+            procs.append(start_bg([*cmd, *TEE_RUN], env, root / "out"))
+            wait_for(lambda: "waiting" in (root / "out").read_text(), "the run's waiting line")
+        finally:
+            release.touch()
+            finish_bg(procs)
+        out = (root / "out").read_text()
+        assert procs[1].returncode == 0 and f"(pid {procs[0].pid}: flock {lock} sh -c" in out, out
+
+
+@case
 def a_symlinked_test_lock_is_taken_by_wt_stop():
     with tempfile.TemporaryDirectory() as tmp:
         root = pathlib.Path(tmp)
@@ -616,6 +660,28 @@ def a_symlinked_test_lock_is_taken_by_wt_stop():
         out = (root / "out").read_text()
         assert run.returncode == 0 and "STATUS: removed (x)" in out and not env_dir.exists(), out
         assert target.is_file(), "the link removed, not what it points to"
+
+
+@case
+def wt_stop_waits_for_a_restore_building_the_env():
+    # it dropped <DB>_restoring and removed the env dir under a restore in flight
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        cmd, env, events = stop_project(root)
+        env_dir, held, release, out = root / ".worktrees/_env/x", root / "held", root / "release", root / "out"
+        procs = [hold_lock(env_dir / "start.lock", env, root / "holder.out", held, release)]
+        try:
+            wait_for(held.exists, "the restore")
+            procs.append(start_bg(cmd, env, out))
+            wait_for(lambda: "waiting" in out.read_text(), "wt-stop's waiting line")
+            assert not events.exists() and env_dir.is_dir(), out.read_text()
+        finally:
+            release.touch()
+            finish_bg(procs)
+        text = out.read_text()
+        assert procs[1].returncode == 0 and "STATUS: removed (x)" in text and not env_dir.exists(), text
+        assert f"start.lock (pid {procs[0].pid}: flock " in text and "then stopping the env" in text, text
+        assert "DROP DATABASE IF EXISTS wt_x_restoring" in events.read_text(), text
 
 
 @case
@@ -648,6 +714,43 @@ def a_caller_holding_the_env_lock_does_not_deadlock_wt_stop_or_the_restore():
         finish_bg([run], timeout=20)
         out = (root / "out").read_text()
         assert run.returncode == 0 and "running under its lock" in out and "db-ready" in out, out
+
+
+@case
+def a_restore_waits_for_another_holding_the_start_lock_and_runs_silently_under_its_caller():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        cmd, env, calls = wt_restore_project(root)
+        held, release, out = root / "held", root / "release", root / "out"
+        procs = [hold_lock(root / ".worktrees/_env/x/start.lock", env, root / "holder.out", held, release)]
+        try:
+            wait_for(held.exists, "the other start")
+            procs.append(start_bg(cmd, env, out))
+            wait_for(lambda: "waiting" in out.read_text(), "the restore's waiting line")
+            assert not calls.exists(), calls.read_text()
+        finally:
+            release.touch()
+            finish_bg(procs)
+        text = out.read_text()
+        assert procs[1].returncode == 0 and "then restoring wt_x" in text and "db-ready" in text, text
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        cmd, env, _calls = wt_restore_project(root)
+        run = start_bg(["flock", str(root / ".worktrees/_env/x/start.lock"), *cmd], env, root / "out")
+        finish_bg([run], timeout=20)
+        text = (root / "out").read_text()
+        assert run.returncode == 0 and "db-ready" in text and "start.lock" not in text, text
+
+
+@case
+def a_restore_of_an_env_that_does_not_exist_says_so():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        cmd, env, calls = wt_restore_project(root)
+        shutil.rmtree(root / ".worktrees/_env/x")
+        proc = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=20)
+        out = proc.stdout + proc.stderr
+        assert proc.returncode == 1 and "no env x" in out and not calls.exists(), out
 
 
 def env_repo_stop_project(root):
@@ -722,10 +825,64 @@ def an_update_of_a_module_the_db_lacks_stops_before_odoo():
 
 @case
 def every_update_and_init_spelling_reaches_the_module_check():
-    _rc, out, psql, _odoo = run_wt_test(["-u", "a,b", "--update=c", "-ud", "-i", "e", "--init=f", "-ig",
-                                         "--test-tags=/a"], odoo_out=RESULT.format(0, 3))
-    found = psql_vars(psql)
-    assert (found.get("modules"), found.get("init")) == ("a,b,c,d", "e,f,g"), (psql, out)
+    # optparse keeps the last of a repeated option, so Odoo updates d and installs g only
+    for major in ("16", "19"):
+        for args, expected in ((["-u", "a,b", "--test-tags=/a"], ("a,b", "")),
+                               (["--update=c", "-i", "e", "--test-enable"], ("c", "e")),
+                               (["-ud", "--init=f", "--test-enable"], ("d", "f")),
+                               (["-u", "a,b", "--update=c", "-ud", "-i", "e", "--init=f", "-ig", "--test-tags=/a"],
+                                ("d", "g")),
+                               (["--upd", "h", "--in", "k", "--test-en"], ("h", "k"))):
+            _rc, out, psql, _odoo = run_wt_test(args, odoo_out=RESULT.format(0, 3), major=major)
+            found = psql_vars(psql)
+            assert (found.get("modules"), found.get("init", "")) == expected, (major, args, psql, out)
+
+
+@case
+def a_value_of_another_option_is_no_update():
+    # --test-tags takes the next argument whatever it looks like; Odoo updates nothing here
+    for args in (["--test-tags", "-utm"], ["--log-handler", "-u:INFO", "--test-enable"], ["-d", "-ix", "--test-enable"]):
+        rc, out, psql, odoo = run_wt_test(args, odoo_out=RESULT.format(0, 2))
+        assert (rc, psql, odoo is not None) == (0, None, True), (args, rc, psql, out)
+        assert "WARNING" not in out and "has a space" not in out, (args, out)
+
+
+@case
+def odoo_19_test_tags_short_option_counts_its_tests():
+    rc, out, _psql, odoo = run_wt_test(["-t", "/acme_mod"], odoo_out=RESULT.format(0, 0), major="19")
+    assert rc == 3 and "executed 0 tests" in out and odoo is not None, (rc, out)
+    rc, out, _psql, _odoo = run_wt_test(["-t", "/acme_mod"], odoo_out=RESULT.format(0, 0), major="16")
+    assert rc == 0 and "do not read as Odoo's options (no such option: -t)" in out, (rc, out)
+
+
+@case
+def odoo_19_without_demo_takes_no_value_before_an_option():
+    _rc, out, psql, _odoo = run_wt_test(["--without-demo", "-u", "acme_mod"], major="19")
+    assert psql_vars(psql).get("modules") == "acme_mod", (psql, out)
+    # Odoo 16 reads the -u as --without-demo's value, so nothing is updated
+    _rc, out, psql, _odoo = run_wt_test(["--without-demo", "-u", "acme_mod"], major="16")
+    assert psql is None, (psql, out)
+
+
+@case
+def arguments_odoo_refuses_skip_the_checks_and_reach_odoo():
+    for args in (["--no-such-option", "--test-enable"], ["--test-enable", "-u"]):
+        rc, out, psql, odoo = run_wt_test(args, odoo_out=RESULT.format(0, 0), odoo_rc=2)
+        assert (rc, psql, odoo is not None) == (2, None, True), (args, rc, psql, out)
+        assert "do not read as Odoo's options" in out and "executed 0 tests" not in out, (args, out)
+
+
+@case
+def without_a_readable_server_help_the_checks_are_skipped_with_a_warning():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        cmd, env = wt_test_project(root, f'printf "%s\\n" {shlex.quote(RESULT.format(0, 0))} >&2\n')
+        odoo = root / ".nix-profile/bin/odoo"
+        odoo.write_text(odoo.read_text().replace("|| exec cat", "|| exit 1 #"))
+        proc = subprocess.run([*cmd, "-u", "acme_mod", "--test-enable"], capture_output=True, text=True, env=env)
+        out = proc.stdout + proc.stderr
+        assert proc.returncode == 0 and "no --update among the options" in out, out
+        assert read_argv(root / "psql.argv") is None and read_argv(root / "odoo.argv") is not None, out
 
 
 @case
@@ -759,7 +916,9 @@ def missing_modules(modules, init=""):
     sql = re.search(r"<<'SQL'\n(.*?\n)SQL\n", render_script(TEST_SRC), re.S).group(1)
     assert sql.count("ir_module_module") == 1, sql
     psql = ["psql", "-X", "-h", "localhost", "-p", str(BASE["postgres_port"]), "-U", BASE["db_user"], "-d", "postgres"]
-    env = {**os.environ, "PGPASSWORD": BASE["db_password"], "PGCONNECT_TIMEOUT": "3"}
+    # read-only whatever the query turns into: it runs on whatever server answers there
+    env = {**os.environ, "PGPASSWORD": BASE["db_password"], "PGCONNECT_TIMEOUT": "3",
+           "PGOPTIONS": "-c default_transaction_read_only=on"}
     probe = shutil.which("psql") and subprocess.run([*psql, "-c", "SELECT 1"], capture_output=True, text=True, env=env)
     if not probe or probe.returncode:
         raise Skip(f"no PostgreSQL on localhost:{BASE['postgres_port']}")
@@ -817,6 +976,27 @@ def a_crashed_test_run_keeps_its_exit_code():
     rc, out, _psql, _odoo = run_wt_test(["--test-enable"], odoo_out="CRITICAL wt_x odoo.service.server: boom",
                                         odoo_rc=255)
     assert rc == 255 and "executed 0 tests" not in out and "WARNING" not in out, (rc, out)
+
+
+@case
+def a_signal_to_a_test_run_reaches_odoo():
+    # the tee path: a foreground pipeline left Odoo running when the wrapper's pid got the signal
+    for sig, code in ((signal.SIGTERM, 143), (signal.SIGINT, 130), (signal.SIGHUP, 129)):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            started, got = root / "started", root / "got"
+            cmd, env = wt_test_project(root, f"trap 'echo \"$$ TERM\" > {got}; exit 143' TERM\n"
+                                             f"echo $$ > {started}\nwhile :; do sleep 0.02; done\n")
+            run = start_bg([*cmd, *TEE_RUN], env, root / "out")
+            try:
+                wait_for(lambda: started.exists() and started.read_text().strip(), "the run's Odoo")
+                os.kill(run.pid, sig)
+            finally:
+                finish_bg([run], timeout=20)
+            odoo_pid = started.read_text().strip()
+            assert run.returncode == code, (sig, run.returncode, (root / "out").read_text())
+            assert got.exists() and got.read_text().split() == [odoo_pid, "TERM"], sig
+            assert not pathlib.Path(f"/proc/{odoo_pid}").exists(), "Odoo outlived the wrapper"
 
 
 @case
@@ -963,7 +1143,8 @@ def a_failed_conf_write_keeps_the_previous_conf():
         sed.chmod(0o755)
         rc, out, conf_path = run_wt_start(root, "0.0.0.0")
         assert rc != 0 and conf_path.read_text() == before, (rc, out)
-        assert sorted(path.name for path in conf_path.parent.iterdir()) == ["data", "db", "dump", "odoo.conf", "port"], out
+        assert sorted(path.name for path in conf_path.parent.iterdir()) == ["data", "db", "dump", "odoo.conf", "port",
+                                                                            "start.lock", "test.lock"], out
 
 
 def newest(path):
@@ -1042,6 +1223,65 @@ def an_env_whose_db_exists_keeps_its_name():
         rc, out, conf_path = run_wt_start(root)
         assert rc == 0 and "DB: wt_x_101326\n" in out, out
         assert parse_conf(conf_path.read_text())["options"]["db_name"] == "wt_x_101326"
+
+
+@case
+def a_relative_wt_dump_is_recorded_absolute_under_its_own_name():
+    # wt-restore reads the recorded dump back, maybe from another cwd
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        elsewhere = newest(root / "elsewhere/odoo_2026-10-21-08-52-07.dump")
+        rc, out, conf_path = run_wt_start(root, extra_env={"WT_DUMP": "elsewhere/odoo_2026-10-21-08-52-07.dump"})
+        recorded = pathlib.Path((conf_path.parent / "dump").read_text().strip())
+        assert rc == 0 and recorded.is_absolute() and recorded.resolve() == elsewhere.resolve(), (recorded, out)
+        # a link keeps its own name, which carries the day
+        link = root / "links/odoo_2026-10-22-01-00-00.dump"
+        link.parent.mkdir()
+        link.symlink_to(elsewhere)
+        rc, out, _conf = run_wt_start(root, argv=("y",), extra_env={"WT_DUMP": "links/odoo_2026-10-22-01-00-00.dump"})
+        recorded = pathlib.Path((root / ".worktrees/_env/y/dump").read_text().strip())
+        assert rc == 0 and "DB: wt_y_102226\n" in out, out
+        assert recorded.is_absolute() and recorded.name == link.name and recorded.resolve() == elsewhere.resolve()
+
+
+@case
+def wt_start_holds_the_start_lock_through_the_restore():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        run_wt_start(root)
+        lock = root / ".worktrees/_env/x/start.lock"
+        (root / "scripts/wt-restore.sh").write_text(f'flock -n {lock} true && echo "start lock free" || echo "start lock held"\n')
+        rc, out, _conf = run_wt_start(root)
+        assert rc == 0 and "start lock held" in out and "start.lock" not in out, out
+
+
+@case
+def wt_starts_service_restart_waits_for_a_test_run():
+    # the restart put the service on the DB beside a wt-test -u
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        run_wt_start(root)
+        events, held, release, out = root / "events", root / "held", root / "release", root / "out"
+        for name in ("psql", "systemctl"):
+            (root / "bin" / name).write_text(f'#!/usr/bin/env bash\necho "{name} $*" >> {events}\n')
+        env = {**os.environ, "HOME": str(root), "WT_TEST_PROJECT_DIR": str(root),
+               "PATH": f"{root / 'bin'}:{os.environ['PATH']}"}
+        procs = [hold_lock(root / ".worktrees/_env/x/test.lock", env, root / "holder.out", held, release)]
+        try:
+            wait_for(held.exists, "the test run")
+            with open(out, "w") as sink:
+                procs.append(subprocess.Popen(["bash", str(root / "scripts/wt-start.sh"), "x"], cwd=root,
+                                              stdin=subprocess.DEVNULL, stdout=sink, stderr=subprocess.STDOUT,
+                                              env=env, start_new_session=True))
+            wait_for(lambda: "waiting" in out.read_text(), "wt-start's waiting line")
+            text = events.read_text() if events.exists() else ""
+            assert "report.url" not in text and "restart" not in text, text
+        finally:
+            release.touch()
+            finish_bg(procs)
+        text, log = out.read_text(), events.read_text()
+        assert procs[1].returncode == 0 and "then restarting the session service" in text, text
+        assert "report.url" in log and "systemctl --user restart odoo-wt@x.service" in log, log
 
 
 def env_repo_project(tmp):

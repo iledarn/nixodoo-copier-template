@@ -4,8 +4,9 @@
 # A DIRTY worktree → keep everything (worktree + env + DB) and report, so no
 # in-progress work is lost. The env-repo worktree (wt-start --env-repo) counts
 # the same way: removed with the env when clean, keeping everything when dirty;
-# its branch stays too. Other sessions are unaffected. A wt-test run on the
-# env is waited for first (the env's test lock, wt-common.sh take_test_lock).
+# its branch stays too. Other sessions are unaffected. A wt-start or wt-restore
+# building the env, then a wt-test run on it, are waited for first (the env's
+# start and test locks, wt-common.sh take_start_lock / take_test_lock).
 #
 # Usage: wt-stop.sh <slug>
 set -euo pipefail
@@ -20,17 +21,21 @@ WT_PATH="$WT_ROOT/$SLUG"
 ENVREPO_PATH="$WT_ENVREPO_ROOT/$SLUG"
 ENV_DIR="$WT_ENVROOT/$SLUG"
 
-# 2 (stale): the env was removed while this waited; one re-created since is waited for in turn.
-LOCK_RC=0
+# The start lock, then the test lock, the order every script takes them in. 2 (stale): the env
+# was removed while this waited; one re-created since is waited for in turn, both locks again.
+LOCK_RC=0 LOCK=start
 while [ -d "$ENV_DIR" ]; do
-    LOCK_RC=0
-    take_test_lock "$SLUG" "stopping the env" || LOCK_RC=$?
+    for LOCK in start test; do
+        LOCK_RC=0
+        "take_${LOCK}_lock" "$SLUG" "stopping the env" || LOCK_RC=$?
+        [ "$LOCK_RC" -eq 0 ] || break
+    done
     [ "$LOCK_RC" -eq 2 ] || break
 done
 if [ "$LOCK_RC" -eq 2 ]; then
-    echo "STATUS: env $SLUG was removed while this waited for its test lock (another wt-stop?): removing what is left"
+    echo "STATUS: env $SLUG was removed while this waited for its $LOCK lock (another wt-stop?): removing what is left"
 elif [ "$LOCK_RC" -ne 0 ] && [ -d "$ENV_DIR" ]; then
-    echo "ERROR: cannot take $ENV_DIR/test.lock: env $SLUG and its service left as they are" >&2
+    echo "ERROR: cannot take $ENV_DIR/$LOCK.lock: env $SLUG and its service left as they are" >&2
     exit 1
 fi
 

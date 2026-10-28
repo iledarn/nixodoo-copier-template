@@ -12,7 +12,9 @@
 #
 # Runs on one env take turns on an exclusive flock of .worktrees/_env/<slug>/test.lock,
 # held for the whole Odoo run: a second run waits, a run wrapped in that flock runs under it.
-# wt-stop and wt-restore's swap take it too; a run still waiting when wt-stop removed the env exits 1.
+# wt-stop, wt-restore's swap and wt-start's service restart take it too; a run still waiting when
+# wt-stop removed the env exits 1. TERM, INT or HUP sent to this script reaches Odoo, which ends
+# its run, and the script exits 128 + the signal.
 #
 # Two runs that would exit 0 having tested nothing are refused:
 #   - a module in -u that the session DB does not have installed (a seed dump
@@ -35,29 +37,66 @@ DB="$(db_name_for "$SLUG")"
 CONF="$WT_ENVROOT/$SLUG/odoo.conf"
 [ -f "$CONF" ] || { echo "ERROR: no session conf at $CONF - run wt-start.sh $SLUG first" >&2; exit 1; }
 
-# What the run installs and updates, and whether Odoo counts its tests: only
-# --test-enable and --test-tags set the test_enable its summary line needs.
-UPDATE=""
-INIT=""
-TESTS=0
-NEXT=""
-for arg in "$@"; do
-    case "$NEXT" in
-        update) UPDATE="$UPDATE,$arg"; NEXT=""; continue ;;
-        init) INIT="$INIT,$arg"; NEXT=""; continue ;;
-    esac
-    case "$arg" in
-        -u | --update) NEXT=update ;;
-        --update=*) UPDATE="$UPDATE,${arg#--update=}" ;;
-        -u*) UPDATE="$UPDATE,${arg#-u}" ;;
-        -i | --init) NEXT=init ;;
-        --init=*) INIT="$INIT,${arg#--init=}" ;;
-        -i*) INIT="$INIT,${arg#-i}" ;;
-        --test-enable | --test-tags | --test-tags=*) TESTS=1 ;;
-    esac
-done
-UPDATE="${UPDATE#,}"
-INIT="${INIT#,}"
+ODOO_BIN="$HOME/{{ nix_profile_rel }}/bin/odoo"
+
+# What the run installs and updates, and whether Odoo counts its tests (only --test-enable and
+# --test-tags set the test_enable its summary line needs), read the way Odoo reads them: optparse
+# over the options its `server --help` lists. So a value is no option (`--test-tags -utm`), an
+# abbreviation counts (`--upd`), a repeated -u or -i keeps its last value as Odoo does, and a
+# version's own spellings (Odoo 19's -t) come with it. An option taking BOOL may go without a
+# value when the next argument is an option (Odoo 19's --without-demo).
+SCAN='
+import optparse, re, shlex, sys
+
+class Parser(optparse.OptionParser):
+    def error(self, msg):
+        raise ValueError(msg)
+
+parser = Parser(add_help_option=False, conflict_handler="resolve")
+optional = set()
+for line in sys.argv[1].splitlines():
+    # option lines sit at the group indent; wrapped help text starts further in
+    match = re.match(r" {1,8}(-\S.*?)(?: {2,}|$)", line)
+    if not match:
+        continue
+    names, takes_value = [], False
+    for spec in re.split(r", (?=-)", match.group(1)):
+        spec_match = re.fullmatch(r"(-[A-Za-z0-9]|--[A-Za-z0-9][\w-]*)(?:([ =])(\S+))?", spec)
+        if not spec_match:
+            names = []
+            break
+        name, sep, metavar = spec_match.groups()
+        names.append(name)
+        takes_value = takes_value or bool(sep)
+        if metavar == "BOOL":
+            optional.add(name)
+    if names:
+        dest = next((n for n in names if n.startswith("--")), names[0]).lstrip("-").replace("-", "_")
+        parser.add_option(*names, dest=dest, action="store" if takes_value else "store_true")
+args = sys.argv[2:]
+for i, arg in enumerate(args):
+    if arg in optional and (i == len(args) - 1 or args[i + 1].startswith("-")):
+        args[i] = arg + "=True"
+try:
+    if not parser.has_option("--update"):
+        raise ValueError("no --update among the options odoo server --help lists")
+    opts, _rest = parser.parse_args(args)
+except ValueError as exc:
+    print("SCAN_ERROR=" + shlex.quote(str(exc)))
+    sys.exit(0)
+tests = bool(getattr(opts, "test_enable", None)) or getattr(opts, "test_tags", None) is not None
+print("UPDATE=" + shlex.quote(opts.update or ""))
+print("INIT=" + shlex.quote(getattr(opts, "init", None) or ""))
+print("TESTS=" + str(int(tests)))
+'
+UPDATE="" INIT="" TESTS=0 SCAN_ERROR=""
+HELP="$("$ODOO_BIN" server --help 2>/dev/null)" || HELP=""
+SCANNED="$(python3 -c "$SCAN" "$HELP" "$@")" || SCANNED="SCAN_ERROR='the scan itself failed'"
+eval "$SCANNED"
+if [ -n "$SCAN_ERROR" ]; then
+    echo "WARNING: the arguments do not read as Odoo's options ($SCAN_ERROR): no module check and" \
+         "no test count for this run, Odoo says what it makes of them" >&2
+fi
 
 for modules in "$UPDATE" "$INIT"; do
     case "$modules" in
@@ -99,7 +138,7 @@ fi
 
 # Picked under the lock: one chosen before a long wait may be taken by then.
 PORT="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
-ODOO=("$HOME/{{ nix_profile_rel }}/bin/odoo" -c "$CONF" --workers 0 --stop-after-init --logfile=
+ODOO=("$ODOO_BIN" -c "$CONF" --workers 0 --stop-after-init --logfile=
       --http-interface 127.0.0.1 --http-port "$PORT" --db-filter "^${DB}\$")
 
 [ "$TESTS" -eq 1 ] || exec "${ODOO[@]}" "$@"
@@ -109,11 +148,31 @@ ODOO=("$HOME/{{ nix_profile_rel }}/bin/odoo" -c "$CONF" --workers 0 --stop-after
 # decides whether anything ran. The log handler keeps that INFO line in the
 # output under any --log-level.
 LOG="$(mktemp)"
-trap 'rm -f "$LOG"' EXIT
-set +e
-"${ODOO[@]}" --log-handler odoo.tests.result:INFO "$@" 2>&1 | tee "$LOG"
-RC=${PIPESTATUS[0]}
-set -e
+FIFO="$LOG.fifo"
+trap 'rm -f "$LOG" "$FIFO"' EXIT
+mkfifo "$FIFO"
+tee "$LOG" < "$FIFO" &
+TEE_PID=$!
+# Odoo runs in the background while this script waits for it: a signal to the script, which
+# would leave a foreground pipeline's Odoo running, goes on to Odoo as TERM (its clean stop).
+SIGNALLED=""
+forward() { SIGNALLED="$1"; [ -z "${ODOO_PID:-}" ] || kill -TERM "$ODOO_PID" 2>/dev/null || true; }
+trap 'forward 129' HUP
+trap 'forward 130' INT
+trap 'forward 143' TERM
+# <&0: a background job's stdin is /dev/null otherwise
+"${ODOO[@]}" --log-handler odoo.tests.result:INFO "$@" <&0 > "$FIFO" 2>&1 &
+ODOO_PID=$!
+[ -z "$SIGNALLED" ] || forward "$SIGNALLED"
+RC=0
+wait "$ODOO_PID" || RC=$?
+# a trapped signal ends the wait, not Odoo: wait again for its own exit
+while kill -0 "$ODOO_PID" 2>/dev/null; do
+    RC=0
+    wait "$ODOO_PID" || RC=$?
+done
+wait "$TEE_PID" || true
+[ -z "$SIGNALLED" ] || exit "$SIGNALLED"
 [ "$RC" -eq 0 ] || exit "$RC"
 COUNT="$(sed -n 's/.*odoo\.tests\.result: .* of \([0-9][0-9]*\) tests when loading database.*/\1/p' "$LOG" | tail -n 1)"
 if [ -z "$COUNT" ]; then

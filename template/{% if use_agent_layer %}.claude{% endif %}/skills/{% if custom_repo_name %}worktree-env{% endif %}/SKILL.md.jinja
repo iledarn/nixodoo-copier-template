@@ -47,14 +47,14 @@ Invoke by absolute path under `${{ project_dir_var }}/.claude/skills/worktree-en
   session would get an env it cannot edit. Addons work runs in a session started in
   the base checkout (`use_worktree: false`); `WT_ALLOW_CLAUDE_WORKTREE=1` lets a
   read-only or test-only run through.
-- **`wt-stop.sh <slug>`** — wait for a `wt-test.sh` run on the env (see the gotchas),
-  stop the env's Odoo; if the worktree is clean, remove it,
+- **`wt-stop.sh <slug>`** — wait for a `wt-start.sh` or `wt-restore.sh` building the env,
+  then for a `wt-test.sh` run on it (see the gotchas), stop the env's Odoo; if the worktree is clean, remove it,
   drop `<DB>`, delete the runtime dir (the branch stays on origin). A **dirty**
   worktree is kept (worktree + env + DB) and reported so no work is lost. The env-repo
   worktree counts the same: removed with the env when clean (its branch stays), and
   while it is dirty everything is kept. Exit 1 when
-  it cannot take the env's test lock (`test.lock` not a writable file): env and
-  service left as they are.
+  it cannot take the env's start or test lock (`start.lock` or `test.lock` not a writable
+  file): env and service left as they are.
 - **`wt-list.sh`** — table of all active envs: slug / port / DB / service, then the
   addons worktree and the env-repo worktree, each `clean`, `dirty` or `none`.
 - `wt-bootstrap.sh` — one-time, light: installs the `odoo{{ service_suffix }}-wt@.service` template unit
@@ -68,8 +68,12 @@ Invoke by absolute path under `${{ project_dir_var }}/.claude/skills/worktree-en
   `--test-tags` run whose summary reports 0 tests (exit 3: a selector without the
   leading `/`, say). `--test-file` alone is not counted (Odoo prints no summary for
   it); a run whose output has no summary (a `--logfile` of your own) keeps Odoo's
-  exit code and warns. Runs on one env take turns: a second run waits for the first
-  to end, then runs (see the gotchas).
+  exit code and warns. It reads its arguments as Odoo does (optparse over the options
+  `odoo server --help` lists): a repeated `-u` or `-i` keeps its last value, an option's
+  value is no option (`--test-tags -utm` updates nothing), abbreviations and Odoo 19's `-t`
+  count. Arguments Odoo would refuse skip both checks with a WARNING and go to Odoo as
+  given. Runs on one env take turns: a second run waits for the first to end, then runs
+  (see the gotchas). TERM, INT or HUP to it reaches Odoo, which stops the run.
 - `wt-link.sh <tree> <farm>` / `wt-restore.sh <slug>` — internals used by `wt-start`.
 
 **Slug** = kebab branch name, conventionally `<kio-key-lower>-<short-desc>`
@@ -172,7 +176,11 @@ meanwhile.
   that): check its crons and mail servers.
 - **Concurrency:** port allocation + `git worktree add` run under `flock`
   (`.worktrees/.wt.lock`); the slow `pg_restore` runs outside the lock so parallel
-  starts overlap. DBs/ports/worktrees are per-slug, so sessions never collide.
+  starts overlap. DBs/ports/worktrees are per-slug, so sessions never collide. Per env,
+  `wt-start.sh` holds `.worktrees/_env/<slug>/start.lock` for its whole run, and
+  `wt-restore.sh` takes it too: a second `wt-start` of the slug waits for the first, and
+  `wt-stop.sh` waits before it drops anything (a stop mid-restore used to drop
+  `<DB>_restoring` and the env dir under it).
 - **Runtime:** sessions run `workers = 0`, `max_cron_threads = 0`. In this threaded
   mode Odoo serves the bus websocket (`/websocket`) on the session's own HTTP port,
   so live updates, chat and notifications work with no nginx and no evented port;
@@ -248,7 +256,9 @@ meanwhile.
   env removed and re-created while it waited has its new lock waited for in turn. On
   every restore that does not reuse the DB, `wt-restore.sh` holds the lock while it swaps
   the fresh copy in as `<DB>` (filestore move, drop of the old DB, rename): neither
-  drops a DB under a running test. A run still waiting when `wt-stop.sh` removed the env exits 1
+  drops a DB under a running test. `wt-start.sh` holds it to write `report.url` and
+  restart the session's service (its waiting line ends `then restarting the session
+  service`), so a re-run never puts the service on the DB beside a running `-u`. A run still waiting when `wt-stop.sh` removed the env exits 1
   (`env <slug> was stopped while this run waited`) rather than run against nothing. A command of your
   own other than `wt-test.sh` takes its turn with
   `flock "${{ project_dir_var }}/.worktrees/_env/<slug>/test.lock" <command>`; `wt-test.sh` needs no

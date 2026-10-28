@@ -19,6 +19,7 @@
 # All of it runs under <DB>_restoring; the DB takes its real name only once
 # neutralized and updated, so the session's service never sees the raw copy, and
 # a failed step drops the copy and its filestore and fails the restore.
+# The whole run holds the env's start lock, so a wt-stop waits for it to end.
 # Idempotent: if the DB already exists it is reused (re-run wt-start is cheap).
 #
 # Usage: wt-restore.sh <slug>
@@ -31,6 +32,14 @@ CONF="$WT_ENVROOT/$SLUG/odoo.conf"
 WT_PATH="$WT_ROOT/$SLUG"
 FILESTORE="$WT_ENVROOT/$SLUG/data/filestore"   # <data_dir>/filestore/<db>, data_dir as wt-start writes it
 ODOO_BIN="$HOME/{{ nix_profile_rel }}/bin/odoo"
+
+# The env's start lock for the whole run (wt-start holds it already around this one): a
+# wt-stop meanwhile would drop <DB>_restoring and remove the env under the restore.
+[ -d "$WT_ENVROOT/$SLUG" ] || { echo "ERROR: no env $SLUG ($WT_ENVROOT/$SLUG) - wt-start makes it" >&2; exit 1; }
+LOCK_RC=0
+take_start_lock "$SLUG" "restoring $DB" || LOCK_RC=$?
+[ "$LOCK_RC" -ne 1 ] || { echo "ERROR: cannot take $WT_ENVROOT/$SLUG/start.lock: nothing restored" >&2; exit 1; }
+[ "$LOCK_RC" -eq 0 ] || { echo "ERROR: env $SLUG was stopped while the restore waited for its start lock" >&2; exit 1; }
 
 # Reuse only a COMPLETE restore: database.is_neutralized is missing on a DB
 # left by an interrupted run of the pre-staging script (the old bare-existence

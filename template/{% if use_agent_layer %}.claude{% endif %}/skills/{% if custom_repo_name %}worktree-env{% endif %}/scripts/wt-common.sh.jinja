@@ -68,8 +68,8 @@ db_name_for() {
 seed_dump() {
     if [ -n "${WT_DUMP:-}" ]; then echo "$WT_DUMP"; else ls -1t "$BACKUP_DIR"/*.dump 2>/dev/null | head -1 || true; fi
 }
-# A new env's DB: wt_<slug>_<MMDDYY> from a dump named <db>_YYYY-MM-DD-HH-MM-SS.dump (its UTC
-# day); a dump named otherwise gives the undated wt_<slug>.
+# A new env's DB: wt_<slug>_<MMDDYY> from a dump named <db>_YYYY-MM-DD-HH-MM-SS.dump (its day on
+# the dump host's clock); a dump named otherwise gives the undated wt_<slug>.
 dated_db_name() {
     local name="wt_${1//-/_}"
     if [[ "$(basename "$2")" =~ _[0-9]{2}([0-9]{2})-([0-9]{2})-([0-9]{2})-[0-9]{2}-[0-9]{2}-[0-9]{2}\.dump$ ]]; then
@@ -119,10 +119,11 @@ drop_db() {
 }
 
 # Whether this process or one up its parent chain holds the lock file $1, as in a run wrapped
-# in `flock <lock>`: waiting would wait on itself. fdinfo lists the locks an fd holds.
+# in `flock <lock>`: waiting would wait on itself. fdinfo lists the locks an fd holds. A
+# symlinked lock file is compared by what it points to, as flock(1) locks that.
 held_by_caller() {
     local lock_id pid=$$ fdinfo
-    lock_id="$(stat -c %d:%i "$1")"
+    lock_id="$(stat -Lc %d:%i "$1")"
     while [ "${pid:-0}" -gt 1 ]; do
         while read -r fdinfo; do
             [ "$(stat -Lc %d:%i "/proc/$pid/fd/${fdinfo##*/}" 2>/dev/null)" != "$lock_id" ] || return 0
@@ -136,7 +137,7 @@ held_by_caller() {
 # its pid into the file, as the flock(1) that took the lock for it is gone; a wrapper's is in /proc/locks.
 lock_holder() {
     local inode pid
-    inode="$(stat -c %i "$1")"
+    inode="$(stat -Lc %i "$1")"
     for pid in $(tr -cd '0-9\n' < "$1") $(awk -v inode=":$inode" \
             '$2 == "FLOCK" && substr($6, length($6) - length(inode) + 1) == inode {print $5}' /proc/locks 2>/dev/null); do
         if [ -r "/proc/$pid/cmdline" ]; then
@@ -146,22 +147,39 @@ lock_holder() {
     done
 }
 
-# Takes the exclusive lock of env $1 (.worktrees/_env/<slug>/test.lock) on fd 9, held until
-# exit or `flock -u 9`, waiting for and naming another holder; $2 says what follows the wait.
-# Returns 2 when the file locked is no longer the one at the path: wt-stop removed the env,
-# lock file included, while this run waited (a new env's runs lock a new file); 1 when unlockable.
-take_test_lock() {
-    local lock="$WT_ENVROOT/$1/test.lock"
+# Takes the exclusive lock file $2 of env $1 (.worktrees/_env/<slug>/$2) on fd $3, held until
+# exit or `flock -u <fd>`, waiting for and naming another holder; $4 says what follows the wait.
+# A caller holding it already (a flock wrapper, wt-start around its wt-restore) is not waited
+# for; $5 is the line that says so, none when empty. Returns 2 when the file locked is no longer
+# the one at the path: wt-stop removed the env, lock file included, while this run waited (a new
+# env's runs lock a new file); 1 when unlockable.
+take_env_lock() {
+    local lock="$WT_ENVROOT/$1/$2" fd="$3"
     # append mode keeps a waiter from wiping the holder's pid
-    exec 9>>"$lock" || return 1
-    if ! flock -n 9; then
+    eval "exec $fd>>\"\$lock\"" || return 1
+    if ! flock -n "$fd"; then
         if held_by_caller "$lock"; then
-            echo "STATUS: a caller of this run holds $lock (a flock wrapper?): running under its lock" >&2
+            [ -z "${5:-}" ] || echo "$5" >&2
             return 0
         fi
-        echo "STATUS: another run on $(db_name_for "$1") holds $lock$(lock_holder "$lock") - waiting for it to end, then $2" >&2
-        flock 9 || return 1
+        echo "STATUS: another run on $(db_name_for "$1") holds $lock$(lock_holder "$lock") - waiting for it to end, then $4" >&2
+        flock "$fd" || return 1
     fi
-    [ "$(stat -Lc %d:%i "/proc/$$/fd/9")" = "$(stat -Lc %d:%i "$lock" 2>/dev/null)" ] || return 2
+    [ "$(stat -Lc %d:%i "/proc/$$/fd/$fd")" = "$(stat -Lc %d:%i "$lock" 2>/dev/null)" ] || return 2
     echo "$$" > "$lock"
+}
+
+# The env's test lock (test.lock, fd 9): one Odoo run on its DB at a time. wt-test holds it for
+# the whole run, wt-stop before it tears down, wt-restore while it swaps a fresh copy in, wt-start
+# while it restarts the service.
+take_test_lock() {
+    take_env_lock "$1" test.lock 9 "$2" \
+        "STATUS: a caller of this run holds $WT_ENVROOT/$1/test.lock (a flock wrapper?): running under its lock"
+}
+
+# The env's start lock (start.lock, fd 8): held by wt-start for its whole run and by wt-restore,
+# so wt-stop never removes an env, or drops its <DB>_restoring, while one builds it. Taken before
+# the test lock wherever both are.
+take_start_lock() {
+    take_env_lock "$1" start.lock 8 "$2" ""
 }
