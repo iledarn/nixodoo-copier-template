@@ -899,8 +899,8 @@ From round 2 the review gets the round delta, not the whole change again (round-
 
 **Check 1b — verification pass (Critical / Major only).** For every line of the
 review's `VERIFY:` block spawn one **`verify`** subagent — all in ONE message so
-they run in parallel (cap 6: verify Criticals first, carry the rest as
-PLAUSIBLE). Prompt = the VERIFY line verbatim (id, file:line, claim, failure
+they run in parallel (cap 6: verify Criticals first, then Majors by the
+review's confidence, high first; carry the rest as PLAUSIBLE). Prompt = the VERIFY line verbatim (id, file:line, claim, failure
 scenario, decisive lines) + "the code is in the worktree `<WT>`". Read the
 first-line verdicts:
 
@@ -986,8 +986,9 @@ returns no closing block. The fix brief waits for every verdict.
 
 **Gate decision:**
 
-- **BLOCKING** — any CONFIRMED or PLAUSIBLE CRITICAL review finding (a REFUTED
-  one never blocks), OR a test/validation failure, OR a
+- **BLOCKING** — any CONFIRMED or PLAUSIBLE CRITICAL review finding, any
+  CONFIRMED MAJOR (a PLAUSIBLE Major and a REFUTED finding never block), OR a
+  test/validation failure, OR a
   failed test case: report to the user, spawn a **fresh** `dev` agent to fix — never
   `SendMessage` the previous one (Agent economy). Its brief: `<PROJECT_RULES_BLOB>`,
   the "work in `<WT>`" instruction, the verified findings with their decisive lines,
@@ -1001,7 +1002,7 @@ returns no closing block. The fix brief waits for every verdict.
   rounds point at the design, not at the last fix. With the pipeline-gates mod a
   fourth `dev` round is refused until the user types
   `/pipeline-gate open rounds <reason>` (three more).
-- **NON-BLOCKING** — only MAJOR / MINOR / low-confidence review findings: report
+- **NON-BLOCKING** — only PLAUSIBLE MAJOR / MINOR / low-confidence review findings: report
   them, file MINOR or low-confidence items as OPEN_THREADS (post-MVP backlog)
   instead of fixing them now. Proceed.
 
