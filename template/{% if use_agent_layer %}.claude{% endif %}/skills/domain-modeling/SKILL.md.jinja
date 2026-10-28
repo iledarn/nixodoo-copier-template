@@ -12,7 +12,7 @@ The project's shared language and decision history. *Reading* `CONTEXT.md` is a 
 | File | Content |
 |------|---------|
 | `${{ project_dir_var }}/CONTEXT.md` | glossary — pure vocabulary; no implementation details, no spec, no scratch notes |
-| `${{ project_dir_var }}/docs/adr/NNNN-slug.md` | one decision each, sequential numbering (next = highest existing + 1) |
+| `${{ project_dir_var }}/docs/adr/NNNN-slug.md` | one decision each; `NNNN` from `adr-number.sh next` ([ADR numbers](#adr-numbers)) |
 
 Both created lazily — on the first resolved term / first qualifying decision. Both written in English.
 
@@ -62,6 +62,20 @@ alternative and the reason it lost.}
 ```
 
 Optional, only when genuinely valuable: a `Status:` line (`proposed | accepted | superseded by NNNN`), Considered Options, Consequences.
+
+## ADR numbers
+
+A branch sees only its own `docs/adr/`, so two parallel branches can take one number, and git merges both files cleanly because the names differ. The highest number in this checkout + 1 is therefore not the next number.
+
+```bash
+bash ${{ project_dir_var }}/.claude/skills/domain-modeling/scripts/adr-number.sh next [<repo>]
+bash ${{ project_dir_var }}/.claude/skills/domain-modeling/scripts/adr-number.sh check [<repo>]
+```
+
+- `next`: the highest number in the checkout, on any local or remote branch and in any other worktree of the repo, + 1. Take it right before writing the record.
+- `check`: run before committing a record. Exit 1 names each record this branch adds (one the default branch lacks) whose number another unmerged branch, or an uncommitted file in another worktree, uses for a different record, and any number two files in the checkout share.
+- Both fetch `origin` first. `<repo>` defaults to the checkout of the current directory; a record in a pipeline's `<ENVREPO>` passes that path.
+- On a collision the record the default branch lacks takes `next`, and the references to its old number on that branch follow it. A number on the default branch never moves, and a gap stays a gap.
 
 **Offer an ADR only when ALL three hold:**
 
