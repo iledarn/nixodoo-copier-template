@@ -1,6 +1,6 @@
 ---
 name: grill
-description: "Relentless requirements interview BEFORE building: one question at a time with a recommended answer, decisions routed to their owner (user vs stakeholder), an NFR sweep, the case against building it at all, an agreed appetite before options are drawn, a trade-off matrix with each option's rabbit holes at real design forks, a pre-mortem, and a gate that will not pass while a named input is unknown; resolved terms and decisions written down via domain-modeling. Use when the user asks to be grilled about a plan, or before any feature-shaped change; the pipeline invokes it as its Phase-1 gate."
+description: "Relentless requirements interview BEFORE building: one question at a time with a recommended answer, decisions routed to their owner (user vs stakeholder), every exemption and state-dependent rule confirmed by the requester as a table with real examples, an NFR sweep, the case against building it at all, an agreed appetite before options are drawn, a trade-off matrix with each option's rabbit holes at real design forks, a pre-mortem, and a gate that will not pass while a named input is unknown; resolved terms and decisions written down via domain-modeling. Use when the user asks to be grilled about a plan, or before any feature-shaped change; the pipeline invokes it as its Phase-1 gate."
 argument-hint: "[task key / topic / plan to stress-test]"
 ---
 
@@ -25,6 +25,23 @@ Every open question has an owner. Route explicitly:
 - **The user's decision** → ask, one at a time. Multiple choice is fine — always leave a free-form escape.
 - **A stakeholder's decision** (product owner, director, accountant…) → do NOT guess and do NOT press the user to guess. Collect into a **Questions for \<stakeholder\>** list: free-form, concrete-scenario phrasing suited to a whiteboard session or a chat message — never multiple-choice. The user's memory (e.g. the `user_identity` node) records who the stakeholders are and how to address them.
 - **Whiteboard photos and free-form braindumps are first-class answers.** Parse them, restate your interpretation, get it confirmed — then continue the grill from what they settled.
+
+## Rule tables
+
+Every exemption ("except service lines", "not for company X") and every rule that depends on a document's state ("editable until confirmed", "required from Acknowledged on") goes to the requester as a table before any code is written, including the ones the task text itself states. Code that does exactly what the task says still breaks production when the rule in the task is wrong: prose hides the case nobody pictured, a row with a real document in it shows it. The table is what the code will do, written from your reading of the ask: a requirement that already came as a table gets one too, because the misreading is what it catches ("editable in Acknowledged" built as "editable until Acknowledged").
+
+- **One row per case the rule tells apart**: the exempted cases too, and every state of the document, not only the states the rule names.
+- **Columns**: the case, what the system will do, an example — a real record from the live data that falls into the row (a read-only lookup), or "none today".
+- **States by the label the user sees** on the status bar, the technical value in brackets. A custom workflow relabels core states, and a technical name alone reads as a different state: `purchase` is "Purchase Order" in core and may be "Acknowledged" in a project's workflow.
+- **The requester confirms every row** — the person who asked for the change, not whoever relays it. When that is a stakeholder, the table goes on the **Questions for \<stakeholder\>** list as it is. An unconfirmed row is never parked as an assumption: it blocks the gate.
+- **Every confirmed row becomes a test case.**
+
+| Order status | Line dates | Example |
+|---|---|---|
+| RFQ (draft) | editable | P00412 |
+| Acknowledged (purchase) | editable | P00398 |
+| Locked (done) | read-only | P00371 |
+| Cancelled (cancel) | read-only | none today |
 
 ## NFR sweep
 
@@ -93,6 +110,7 @@ When the tree is walked, produce:
 **Appetite:** <small | medium | large — and whether the chosen option fits it>
 **Case against:** <the strongest reasons not to build this and why they did not win; or "none found — looked">
 **Decisions:** <one line each — what + owner>
+**Rule tables:** <each table as confirmed, who confirmed it and when; or "none — no exemption or state rule">
 **Assumptions:** <ledger entries, signed off; or "none">
 **Accepted risks:** <pre-mortem survivors the user chose to live with; or "none">
 **Questions for <stakeholder>:** <list; or "none">
@@ -109,6 +127,7 @@ Confirmation is not on offer while a named input is still unknown. Before asking
 
 - every question routed to the user is answered. An unanswered one is not an assumption and not a default you may pick — it is one more question, asked now;
 - every stakeholder question is answered, or parked as a ledger assumption the user has signed off;
+- every rule table is confirmed, row by row, by the requester;
 - the appetite is agreed, and the recommended option fits it;
 - the case against has been made and answered.
 
@@ -123,9 +142,9 @@ When the grill runs against a tracked task, persist per `odoo-tickets`:
 
 - every Q&A round → the task's `questions` / `answers` Html fields (parallel numbered lists, append — never overwrite earlier rounds)
 - a scope change or settled design call → a `Requirement Change` / `Design Decision` internal note
-- the stakeholder-questions list and the assumptions ledger → into the Technical Solution tab or a note, so they live on the ticket, not only in chat
+- the stakeholder-questions list, the rule tables (with who confirmed each and when) and the assumptions ledger → into the Technical Solution tab or a note, so they live on the ticket, not only in chat
 {% endif %}
 
 ## In the pipeline
 
-Pipeline Phase 1 invokes this as a **gate** for feature-shaped tasks — new module, new model/engine/report, redesign, cross-module flow, anything whose description leaves the domain model underspecified. The pipeline PAUSES until the Alignment Summary is confirmed. Mechanical tasks (typo, one-field change, clear bugfix with a reproduction) skip the grill — but a real ambiguity discovered later re-opens it for one focused round, persisted the same way.
+Pipeline Phase 1 invokes this as a **gate** for feature-shaped tasks — new module, new model/engine/report, redesign, cross-module flow, anything whose description leaves the domain model underspecified. The pipeline PAUSES until the Alignment Summary is confirmed. Mechanical tasks (typo, one-field change, clear bugfix with a reproduction) skip the grill — but a real ambiguity discovered later re-opens it for one focused round, persisted the same way. A task that adds or changes an exemption or a state rule (a one-field readonly or required change included) runs the **Rule tables** round even when the rest of the grill is skipped.

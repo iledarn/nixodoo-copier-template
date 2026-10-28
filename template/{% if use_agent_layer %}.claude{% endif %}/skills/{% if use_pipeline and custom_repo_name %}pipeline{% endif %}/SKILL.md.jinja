@@ -511,7 +511,10 @@ Before spawning any subagent:
      reproduction) → skip the grill (with the mod, call Phase 2 and the user
      presses **Mechanical** in the dialog or the pane); ask only if a real ambiguity surfaces —
      and a real ambiguity discovered in ANY later phase re-opens a focused
-     grill round.
+     grill round. A task that adds or changes an exemption or a state rule
+     (a one-field readonly or required change included) is not mechanical for
+     the grill's **Rule tables** round: it runs that round and waits for the
+     requester's confirmation before Phase 2.
 
 {% if task_software_fields %}
    **Persist every clarifying round to the task's Technical Solution tab**
@@ -595,12 +598,14 @@ Before spawning any subagent:
    **Important**: Adapt the template — skip/add sections as needed. Goal is actionable technical clarity, not filling every section.
 
 {% if task_software_fields %}
-4. **Populate Test Cases** — when the Test Cases tab is empty or has fewer than 3 cases, create comprehensive `project.task.testcase` records over the Odoo connector:
+4. **Populate Test Cases** — when the Test Cases tab is empty or has fewer than 3 cases, or a confirmed grill rule table has a row no case covers yet, create comprehensive `project.task.testcase` records over the Odoo connector:
 {% else %}
-4. **Populate Test Cases** — when the task has no `Test Cases` note, or it lists fewer than 3 cases, post a comprehensive one over the Odoo connector:
+4. **Populate Test Cases** — when the task has no `Test Cases` note, or it lists fewer than 3 cases, or a confirmed grill rule table has a row no case covers yet, post a comprehensive one over the Odoo connector:
 {% endif %}
 
-   a. Derive test cases from the Description + Technical Solution
+   a. Derive test cases from the Description + Technical Solution. Every
+      confirmed row of a grill rule table is a case of its own, its example
+      record in the steps
    b. Cover ALL of these categories:
       - **Happy path**: Normal usage flow, expected inputs, correct results
       - **Edge cases**: Empty values, boundary values, max limits, special characters
@@ -641,7 +646,8 @@ Before spawning any subagent:
    linked docs). For a **feature-shaped** task (new module, new
    model/engine/report, redesign, cross-module flow) run the **`grill` skill**
    and PAUSE until the user confirms its Alignment Summary; for a mechanical
-   task ask clarifying questions in chat only if the scope is unclear.
+   task ask clarifying questions in chat only if the scope is unclear. An
+   exemption or a state rule still gets the grill's Rule tables round.
 {% if use_kb %}
    Before the grill, what kb knows about the task's areas: `kb context <WIP_ID>`. Exit 4
    means the record has no area tag: `kb edit <WIP_ID> --tag <area>` (`kb tags` lists the
@@ -687,7 +693,7 @@ Before spawning any subagent:
    the flag adds it to a running env. (Prereq: a seed dump in `backup/` — if `wt-start`
    reports none, ask the user to {% if backup_s3_bucket %}run `nix run .#download-backup` once{% else %}drop a prod dump into `backup/`{% endif %} first.)
 
-Report: "Starting pipeline for: <TASK-KEY> — <task summary>". Add the grill-gate outcome: "Grill gate: Alignment Summary confirmed (N questions, M assumptions)" or "Grill gate: skipped (mechanical task)".{% if tickets_mcp == 'odoo' %} {% if task_software_fields %}If clarifying questions were asked, add "N clarifying Q&A captured to the Technical Solution tab." If Technical Solution was enriched, add "Technical Solution auto-generated and written to the task. Please review." If Test Cases were generated, add "N test cases written to Test Cases tab."{% else %}If clarifying questions were asked, add "N clarifying Q&A posted as Design Decision notes." If Technical Solution was enriched, add "Technical Solution auto-generated and posted as a note. Please review." If Test Cases were generated, add "N test cases posted as a Test Cases note."{% endif %}{% endif +%}
+Report: "Starting pipeline for: <TASK-KEY> — <task summary>". Add the grill-gate outcome: "Grill gate: Alignment Summary confirmed (N questions, M assumptions, R rule tables)" or "Grill gate: skipped (mechanical task; R rule tables confirmed)".{% if tickets_mcp == 'odoo' %} {% if task_software_fields %}If clarifying questions were asked, add "N clarifying Q&A captured to the Technical Solution tab." If Technical Solution was enriched, add "Technical Solution auto-generated and written to the task. Please review." If Test Cases were generated, add "N test cases written to Test Cases tab."{% else %}If clarifying questions were asked, add "N clarifying Q&A posted as Design Decision notes." If Technical Solution was enriched, add "Technical Solution auto-generated and posted as a note. Please review." If Test Cases were generated, add "N test cases posted as a Test Cases note."{% endif %}{% endif +%}
 
 ---
 
@@ -715,7 +721,7 @@ conversation:
     <the Phase-1 scope summary: modules, Technical Solution highlights>
 
     ## Alignment Summary
-    <the confirmed Alignment Summary verbatim, or "Mechanical: grill skipped, <why>">
+    <the confirmed Alignment Summary verbatim, or "Mechanical: grill skipped, <why>" and the rule tables confirmed for it>
 
     ## Rules
 {% if use_kb %}
