@@ -16,20 +16,20 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/wt-common.sh"
 cd "$PROJ"
 
 SLUG="${1:?usage: wt-stop.sh <slug>}"
-DB="$(db_name_for "$SLUG")"
 WT_PATH="$WT_ROOT/$SLUG"
 ENVREPO_PATH="$WT_ENVREPO_ROOT/$SLUG"
 ENV_DIR="$WT_ENVROOT/$SLUG"
 
 # The start lock, then the test lock, the order every script takes them in. 2 (stale): the env
 # was removed while this waited; one re-created since is waited for in turn, both locks again.
-LOCK_RC=0 LOCK=start
+LOCK_RC=0 LOCK=start LOCKED=""
 while [ -d "$ENV_DIR" ]; do
     for LOCK in start test; do
         LOCK_RC=0
         "take_${LOCK}_lock" "$SLUG" "stopping the env" || LOCK_RC=$?
         [ "$LOCK_RC" -eq 0 ] || break
     done
+    [ "$LOCK_RC" -ne 0 ] || LOCKED=1
     [ "$LOCK_RC" -eq 2 ] || break
 done
 if [ "$LOCK_RC" -eq 2 ]; then
@@ -38,6 +38,8 @@ elif [ "$LOCK_RC" -ne 0 ] && [ -d "$ENV_DIR" ]; then
     echo "ERROR: cannot take $ENV_DIR/$LOCK.lock: env $SLUG and its service left as they are" >&2
     exit 1
 fi
+# Read under the locks: a wt-start waited for may have recorded a new name.
+DB="$(db_name_for "$SLUG")"
 
 systemctl --user stop "odoo{{ service_suffix }}-wt@$SLUG.service" 2>/dev/null || true
 
@@ -63,5 +65,11 @@ if db_exists "$DB"; then
 fi
 # A restore killed mid-way leaves its raw staging copy behind.
 drop_db "${DB}_restoring" 2>/dev/null || true
-rm -rf "$ENV_DIR"
+# Only the env dir this holds the locks of, moved aside in one rename before it is deleted: a
+# wt-start meanwhile makes a new one with new locks, never takes these while they go.
+if [ -n "$LOCKED" ] && [ -d "$ENV_DIR" ]; then
+    GONE="$WT_ENVROOT/.stopping-$SLUG-$$"
+    mv "$ENV_DIR" "$GONE"
+    rm -rf "$GONE"
+fi
 echo "STATUS: removed ($SLUG) — worktree$ENVREPO_NOTE + env + DB dropped; branch $SLUG kept"

@@ -73,7 +73,9 @@ Invoke by absolute path under `${{ project_dir_var }}/.claude/skills/worktree-en
   value is no option (`--test-tags -utm` updates nothing), abbreviations and Odoo 19's `-t`
   count. Arguments Odoo would refuse skip both checks with a WARNING and go to Odoo as
   given. Runs on one env take turns: a second run waits for the first to end, then runs
-  (see the gotchas). TERM, INT or HUP to it reaches Odoo, which stops the run.
+  (see the gotchas). TERM or HUP to a test run is passed on to Odoo (its clean stop); a
+  terminal's Ctrl-C reaches Odoo itself; whatever Odoo got, it is sent a TERM 30 s later if
+  it still runs, and the script exits 128 + the signal.
 - `wt-link.sh <tree> <farm>` / `wt-restore.sh <slug>` — internals used by `wt-start`.
 
 **Slug** = kebab branch name, conventionally `<kio-key-lower>-<short-desc>`

@@ -59,6 +59,10 @@ PSQL="psql -X -h $WT_DB_HOST -p $WT_DB_PORT -U {{ db_user }}"
 
 WT_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# git closes the env lock fds 8 and 9: a `git maintenance --auto` it detaches would hold an
+# env's lock after the script is gone (a held lock stays held by the holder's fd, not its copies).
+git() { command git "$@" 8>&- 9>&-; }
+
 # slug -> its env's DB: the name wt-start recorded, else the undated wt_<slug> of an older env
 db_name_for() {
     if [ -s "$WT_ENVROOT/$1/db" ]; then cat "$WT_ENVROOT/$1/db"; else echo "wt_${1//-/_}"; fi

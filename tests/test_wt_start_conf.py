@@ -239,7 +239,7 @@ def a_test_run_talks_to_ipv4_loopback_with_the_session_db():
     run = text[text.index('ODOO=("$ODOO_BIN"'):]
     for flag in ('-c "$CONF"', "--http-interface 127.0.0.1", '--http-port "$PORT"', '--db-filter "^${DB}\\$"'):
         assert flag in run[:run.index(")\n")], (flag, run)
-    assert 'exec "${ODOO[@]}" "$@"' in run and '"$@" <&0 > "$FIFO" 2>&1 &' in run, run
+    assert 'exec "${ODOO[@]}" "$@"' in run and '"$@" <&0 >&7 2>&1 7>&- &' in run, run
 
 
 # what `odoo server --help` prints, captured from Odoo 16 and 19: wt-test.sh reads its options from it
@@ -685,6 +685,48 @@ def wt_stop_waits_for_a_restore_building_the_env():
 
 
 @case
+def wt_stop_drops_the_db_a_start_it_waited_for_recorded():
+    # the name was read before the wait: the old one was dropped, the new DB left behind
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        cmd, env, events = stop_project(root)
+        env_dir, held, release, out = root / ".worktrees/_env/x", root / "held", root / "release", root / "out"
+        procs = [hold_lock(env_dir / "start.lock", env, root / "holder.out", held, release,
+                           f"echo wt_x_102826 > {shlex.quote(str(env_dir / 'db'))}")]
+        try:
+            wait_for(held.exists, "the start")
+            procs.append(start_bg(cmd, env, out))
+            wait_for(lambda: "waiting" in out.read_text(), "wt-stop's waiting line")
+        finally:
+            release.touch()
+            finish_bg(procs)
+        log = events.read_text()
+        assert procs[1].returncode == 0 and "DROP DATABASE IF EXISTS wt_x_102826_restoring" in log, log
+        assert "wt_x_restoring" not in log, log
+
+
+@case
+def wt_stop_moves_the_env_aside_before_deleting_it():
+    # deleted in place, its lock files went first and a newcomer took fresh ones mid-teardown
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        cmd, env, _events = stop_project(root)
+        env_dir, mid, release, out = root / ".worktrees/_env/x", root / "mid", root / "release", root / "out"
+        rm = root / "bin/rm"
+        rm.write_text(f'#!/usr/bin/env bash\ncase "$*" in *.stopping-x-*) touch {mid}\n'
+                      f'  while [ ! -e {release} ]; do sleep 0.02; done ;; esac\nexec {shutil.which("rm")} "$@"\n')
+        rm.chmod(0o755)
+        run = start_bg(cmd, env, out)
+        try:
+            wait_for(mid.exists, "the deletion")
+            assert not env_dir.exists() and len(list(env_dir.parent.glob(".stopping-x-*"))) == 1, out.read_text()
+        finally:
+            release.touch()
+            finish_bg([run])
+        assert run.returncode == 0 and not list(env_dir.parent.iterdir()), list(env_dir.parent.iterdir())
+
+
+@case
 def wt_stop_without_an_env_dir_removes_the_rest_without_a_lock():
     with tempfile.TemporaryDirectory() as tmp:
         root = pathlib.Path(tmp)
@@ -981,7 +1023,7 @@ def a_crashed_test_run_keeps_its_exit_code():
 @case
 def a_signal_to_a_test_run_reaches_odoo():
     # the tee path: a foreground pipeline left Odoo running when the wrapper's pid got the signal
-    for sig, code in ((signal.SIGTERM, 143), (signal.SIGINT, 130), (signal.SIGHUP, 129)):
+    for sig, code in ((signal.SIGTERM, 143), (signal.SIGHUP, 129)):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             started, got = root / "started", root / "got"
@@ -997,6 +1039,77 @@ def a_signal_to_a_test_run_reaches_odoo():
             assert run.returncode == code, (sig, run.returncode, (root / "out").read_text())
             assert got.exists() and got.read_text().split() == [odoo_pid, "TERM"], sig
             assert not pathlib.Path(f"/proc/{odoo_pid}").exists(), "Odoo outlived the wrapper"
+
+
+ODOO_SIGNALS = """\
+import os, signal, sys, time
+got = []
+def note(sig, _frame):
+    got.append(signal.Signals(sig).name)
+    open(sys.argv[1], "a").write(signal.Signals(sig).name + "\\n")
+signal.signal(signal.SIGINT, note)  # as Odoo's ThreadedServer re-arms it
+signal.signal(signal.SIGTERM, note)
+open(sys.argv[2], "w").write(str(os.getpid()))
+while not got:
+    time.sleep(0.02)
+time.sleep(0.5)  # a second signal, if one comes, is noted too
+sys.exit(130)
+"""
+
+
+@case
+def a_terminal_ctrl_c_reaches_odoo_once():
+    # the tty sends INT to the whole group; Odoo has it, and a forwarded TERM on top was its
+    # second signal, a forced shutdown
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        got, started = root / "got", root / "started"
+        (root / "odoo_signals.py").write_text(ODOO_SIGNALS)
+        cmd, env = wt_test_project(root, f"exec python3 {root / 'odoo_signals.py'} {got} {started}\n")
+        run = start_bg([*cmd, *TEE_RUN], env, root / "out")
+        try:
+            wait_for(lambda: started.exists() and started.read_text().strip(), "the run's Odoo")
+            os.killpg(run.pid, signal.SIGINT)
+        finally:
+            finish_bg([run], timeout=20)
+        assert run.returncode == 130 and got.read_text().split() == ["SIGINT"], (run.returncode, got.read_text())
+
+
+@case
+def a_signalled_run_ends_though_a_browser_holds_its_output():
+    # Odoo 16 leaves its test browser up when the run is stopped, the browser holding stdout
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        started, orphan = root / "started", root / "orphan"
+        cmd, env = wt_test_project(root, f"trap 'sleep 60 9>&- & echo $! > {orphan}; exit 143' TERM\n"
+                                         f"echo $$ > {started}\nwhile :; do sleep 0.02; done\n")
+        run = start_bg([*cmd, *TEE_RUN], env, root / "out")
+        try:
+            wait_for(lambda: started.exists() and started.read_text().strip(), "the run's Odoo")
+            os.kill(run.pid, signal.SIGTERM)
+            finish_bg([run], timeout=20)
+            free = subprocess.run(["flock", "-n", str(root / ".worktrees/_env/x/test.lock"), "true"]).returncode
+            assert run.returncode == 143 and free == 0, (run.returncode, free, (root / "out").read_text())
+        finally:
+            if orphan.exists():
+                try:
+                    os.kill(int(orphan.read_text()), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+
+@case
+def a_signal_before_odoo_starts_stops_the_run_without_it():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        cmd, env = wt_test_project(root, f'printf "%s\\n" {shlex.quote(RESULT.format(0, 1))} >&2\n')
+        mkfifo = root / "bin/mkfifo"
+        mkfifo.write_text(f'#!/usr/bin/env bash\nkill -TERM $PPID\nexec {shlex.quote(shutil.which("mkfifo"))} "$@"\n')
+        mkfifo.chmod(0o755)
+        run = start_bg([*cmd, *TEE_RUN], env, root / "out")
+        finish_bg([run], timeout=20)
+        free = subprocess.run(["flock", "-n", str(root / ".worktrees/_env/x/test.lock"), "true"]).returncode
+        assert (run.returncode, read_argv(root / "odoo.argv"), free) == (143, None, 0), (root / "out").read_text()
 
 
 @case
@@ -1253,6 +1366,20 @@ def wt_start_holds_the_start_lock_through_the_restore():
         (root / "scripts/wt-restore.sh").write_text(f'flock -n {lock} true && echo "start lock free" || echo "start lock held"\n')
         rc, out, _conf = run_wt_start(root)
         assert rc == 0 and "start lock held" in out and "start.lock" not in out, out
+
+
+@case
+def git_gets_no_env_lock_fd():
+    # a `git maintenance --auto` git detaches would hold an env lock after wt-start is gone
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        run_wt_start(root)
+        git_stub = root / "bin/git"
+        git_stub.write_text(git_stub.read_text().replace(
+            "#!/usr/bin/env bash\n",
+            '#!/usr/bin/env bash\nfor fd in 8 9; do [ ! -e /proc/$$/fd/$fd ] || echo "git got fd $fd" >&2; done\n', 1))
+        rc, out, _conf = run_wt_start(root)
+        assert rc == 0 and "git got fd" not in out, out
 
 
 @case

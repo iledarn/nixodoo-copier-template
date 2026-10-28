@@ -305,6 +305,16 @@ def main():
           == [rule for rule in CRITICAL_PINNED if rule in out])
     check(f"critical: under {CONTEXT_CAP} characters", len(out) < CONTEXT_CAP, f"{len(out)} characters")
 
+    # a sync that fills the budget before the index: the cut keeps the CRITICAL rules all the same
+    flood = "\n".join(f"possible duplicate: [{i}] a long ticket title about a stock move ~ [{i + 1}] its older thread"
+                      for i in range(160))
+    proc, calls = rig.run(payload(), index="index-critical.txt", KB_STUB_SYNC=flood)
+    out = proc.stdout
+    check("critical cut: every CRITICAL rule kept", all(rule in out for rule in critical), out[-1500:])
+    check("critical cut: ends with the cut line", out.rstrip().endswith(CUT_LINE), out[-300:])
+    check(f"critical cut: under {CONTEXT_CAP} characters", len(out) < CONTEXT_CAP, f"{len(out)} characters")
+    check("rig: the sync alone passes the budget", len(flood) > 9_500, len(flood))
+
     # local extras that print more than the whole budget: cut at a line, said so, still under the cap
     local.write_text('#!/usr/bin/env bash\nfor i in $(seq 400); do echo "local: a chatty extra line number $i"; done\n')
     proc, calls = rig.run(payload(source="compact"), index="index-busy.txt", KB_STUB_NOTICES="2")

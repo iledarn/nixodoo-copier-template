@@ -13,8 +13,8 @@
 # Runs on one env take turns on an exclusive flock of .worktrees/_env/<slug>/test.lock,
 # held for the whole Odoo run: a second run waits, a run wrapped in that flock runs under it.
 # wt-stop, wt-restore's swap and wt-start's service restart take it too; a run still waiting when
-# wt-stop removed the env exits 1. TERM, INT or HUP sent to this script reaches Odoo, which ends
-# its run, and the script exits 128 + the signal.
+# wt-stop removed the env exits 1. On a test run, TERM, INT or HUP sent to this script ends
+# Odoo's run (see below) and the script exits 128 + the signal; any other run is Odoo itself.
 #
 # Two runs that would exit 0 having tested nothing are refused:
 #   - a module in -u that the session DB does not have installed (a seed dump
@@ -147,31 +147,47 @@ ODOO=("$ODOO_BIN" -c "$CONF" --workers 0 --stop-after-init --logfile=
 # ("odoo.tests.result: F failed, E error(s) of N tests when loading database")
 # decides whether anything ran. The log handler keeps that INFO line in the
 # output under any --log-level.
+#
+# Odoo runs in the background while this script waits for it, so a signal to the script reaches
+# it (a foreground pipeline's Odoo ran on): TERM or HUP goes on as TERM, its clean stop. INT does
+# not: a terminal's Ctrl-C has reached Odoo already, and a second signal is its forced stop. 30 s
+# after any of them a still-running Odoo gets a TERM: a test's browser or thread can keep it up.
 LOG="$(mktemp)"
 FIFO="$LOG.fifo"
-trap 'rm -f "$LOG" "$FIFO"' EXIT
-mkfifo "$FIFO"
-tee "$LOG" < "$FIFO" &
-TEE_PID=$!
-# Odoo runs in the background while this script waits for it: a signal to the script, which
-# would leave a foreground pipeline's Odoo running, goes on to Odoo as TERM (its clean stop).
-SIGNALLED=""
-forward() { SIGNALLED="$1"; [ -z "${ODOO_PID:-}" ] || kill -TERM "$ODOO_PID" 2>/dev/null || true; }
-trap 'forward 129' HUP
+TEE_PID="" ODOO_PID="" SIGNALLED=""
+# tee is stopped on the way out: a browser the run started may still hold the FIFO open
+trap '[ -z "$TEE_PID" ] || kill "$TEE_PID" 2>/dev/null || true; rm -f "$LOG" "$FIFO"' EXIT
+forward() {
+    SIGNALLED="$1"
+    if [ -n "${2:-}" ] && [ -n "$ODOO_PID" ]; then kill -TERM "$ODOO_PID" 2>/dev/null || true; fi
+}
+trap 'forward 129 on' HUP
 trap 'forward 130' INT
-trap 'forward 143' TERM
+trap 'forward 143 on' TERM
+mkfifo "$FIFO"
+# 9>&-: a tee left waiting must not hold the env's test lock
+tee "$LOG" < "$FIFO" 9>&- &
+TEE_PID=$!
+# Held until Odoo has its own copy, so tee never waits on an open no writer will make.
+exec 7>"$FIFO"
+[ -z "$SIGNALLED" ] || exit "$SIGNALLED"
 # <&0: a background job's stdin is /dev/null otherwise
-"${ODOO[@]}" --log-handler odoo.tests.result:INFO "$@" <&0 > "$FIFO" 2>&1 &
+"${ODOO[@]}" --log-handler odoo.tests.result:INFO "$@" <&0 >&7 2>&1 7>&- &
 ODOO_PID=$!
-[ -z "$SIGNALLED" ] || forward "$SIGNALLED"
+exec 7>&-
+[ -z "$SIGNALLED" ] || forward "$SIGNALLED" on
 RC=0
 wait "$ODOO_PID" || RC=$?
-# a trapped signal ends the wait, not Odoo: wait again for its own exit
-while kill -0 "$ODOO_PID" 2>/dev/null; do
-    RC=0
-    wait "$ODOO_PID" || RC=$?
-done
+if [ -n "$SIGNALLED" ]; then
+    ( sleep 30; kill -TERM "$ODOO_PID" 2>/dev/null ) 9>&- &
+    WATCHDOG=$!
+    # a trapped signal ends a wait, not Odoo
+    while kill -0 "$ODOO_PID" 2>/dev/null; do wait "$ODOO_PID" || true; done
+    kill "$WATCHDOG" 2>/dev/null || true
+    exit "$SIGNALLED"
+fi
 wait "$TEE_PID" || true
+TEE_PID=""
 [ -z "$SIGNALLED" ] || exit "$SIGNALLED"
 [ "$RC" -eq 0 ] || exit "$RC"
 COUNT="$(sed -n 's/.*odoo\.tests\.result: .* of \([0-9][0-9]*\) tests when loading database.*/\1/p' "$LOG" | tail -n 1)"
