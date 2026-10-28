@@ -10,7 +10,8 @@
 # today prints the list, the kb band shows it; nothing is recorded as shown), and whatever the
 # model must act on (the compaction note, a stale schema, NO MEMORY) prints first. FIT then
 # holds the whole output under BUDGET characters: past it the last pinned rules give way to a
-# line naming kb index, then the end of the output to a line saying it was cut. Every session
+# line naming kb index (a CRITICAL rule never does), then the end of the output to a line
+# saying it was cut. Every session
 # gets the same output, a pipeline child included. Notices (kb add --once) are the user's and
 # live in the kb pane: the start never names them.
 #
@@ -152,8 +153,9 @@ if pending:
 }
 
 # Holds stdin under argv[1] characters as Claude Code counts them (UTF-16 code units). Over it,
-# the last pinned rules give way first, to one line naming kb index; if that is not enough, the
-# output is cut at a line with a line saying so. What prints first is kept longest.
+# the last pinned rules give way first, to one line naming kb index, and a CRITICAL one never
+# does, wherever kb index lists it; if that is not enough, the output is cut at a line with a
+# line saying so. What prints first is kept longest.
 FIT='
 import sys
 
@@ -170,12 +172,15 @@ if not fits(lines) and "## Pinned" in lines:
     end = start
     while end < len(lines) and lines[end].startswith("- ["):
         end += 1
-    for keep in range(end - start - 1, -1, -1):
-        note = f"+{end - start - keep} pinned rules left out to fit the context: kb index lists them"
-        trial = lines[:start] + lines[start:start + keep] + [note] + lines[end:]
+    pinned = lines[start:end]
+    droppable = [i for i, line in enumerate(pinned) if "] CRITICAL " not in line]
+    for count in range(1, len(droppable) + 1):
+        gone = set(droppable[-count:])
+        note = f"+{count} pinned rules left out to fit the context: kb index lists them"
+        trial = lines[:start] + [line for i, line in enumerate(pinned) if i not in gone] + [note] + lines[end:]
         if fits(trial):
             break
-    if end > start:
+    if droppable:
         lines = trial
 if not fits(lines):
     note = "kb: the session start was cut here to fit the context; kb index and kb today print the rest"
