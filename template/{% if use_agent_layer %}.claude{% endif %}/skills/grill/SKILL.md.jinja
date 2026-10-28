@@ -28,7 +28,7 @@ Every open question has an owner. Route explicitly:
 
 ## Rule tables
 
-Every exemption ("except service lines", "not for company X") and every rule that depends on a document's state ("editable until confirmed", "required from Acknowledged on") goes to the requester as a table before any code is written, including the ones the task text itself states. Code that does exactly what the task says still breaks production when the rule in the task is wrong: prose hides the case nobody pictured, a row with a real document in it shows it.
+Every exemption ("except service lines", "not for company X") and every rule that depends on a document's state ("editable until confirmed", "required from Acknowledged on") goes to the requester as a table before any code is written, including the ones the task text itself states. Code that does exactly what the task says still breaks production when the rule in the task is wrong: prose hides the case nobody pictured, a row with a real document in it shows it. The table is what the code will do, written from your reading of the ask: a requirement that already came as a table gets one too, because the misreading is what it catches ("editable in Acknowledged" built as "editable until Acknowledged").
 
 - **One row per case the rule tells apart**: the exempted cases too, and every state of the document, not only the states the rule names.
 - **Columns**: the case, what the system will do, an example — a real record from the live data that falls into the row (a read-only lookup), or "none today".
