@@ -1,4 +1,5 @@
 {% set hours = 'planned_hours' if odoo_version == '16.0' else 'allocated_hours' %}
+{% set repo_org = custom_repo_pattern | regex_replace('.*[:/]([^/]+)/\\{\\}.*', '\\1') if custom_repo_pattern else 'my-org' %}
 ---
 name: pipeline
 description: "Full Odoo development lifecycle orchestrator, in two sessions: a mother (task reading, kb context, grill, status, ticket with test cases, brief) starts a child session (worktree env -> dev -> QC gate (review + validation, loops back to dev) -> docs -> demo GIF (optional, on the user's yes) -> PR) and afterwards verifies the PR, deploys on the user's command and closes the ticket. Without a session tool the whole pipeline runs in one session. Subagents: dev (writes code), review (read-only QC/review), documenter (writes module docs)."
@@ -173,7 +174,6 @@ decides on, one by one, in Phase 7{% else %}that become standalone Backlog tasks
 - **Owner is not the user → handover note.** A slice, blocker or thread ticket
   created for someone else, or handed to them, gets the `odoo-tickets` handover
   note (draft shown to the user first, `mail.notification` read back).
-
 {% else %}
 ## Change Tracking
 
@@ -206,7 +206,7 @@ needs from it:
   on stdin (a given user: `with_user()`), or `psql -d <DB>` for plain reads. The Odoo
   connector is production only.
 - Prereq: a seed dump in `backup/` ({% if backup_s3_bucket %}`nix run .#download-backup` to fetch/refresh{% else %}drop a `pg_dump -Fc` file in manually{% endif %}) —
-  if `wt-start` reports none, ask the user to provide it first.
+  if `wt-start` reports none, ask the user to {% if backup_s3_bucket %}run it once{% else %}provide it{% endif %} first.
 
 ---
 
@@ -223,7 +223,7 @@ text:
   key. It refuses Phase 2 and later while {% if status_mcp == 'teams' %}the Teams status or {% endif %}the grill gate is closed, and Phase 6
   and later until the QC verdict passed; the refusal says what is missing.
 - The `dev` agent and every edit under `.worktrees/` are refused until {% if status_mcp == 'teams' %}the Teams status was sent and
-  {% endif %}the user pressed **confirm** (or **mechanical**): in the pipeline pane, or in the dialog the
+  {%+ endif %}the user pressed **confirm** (or **mechanical**): in the pipeline pane, or in the dialog the
   mod opens, with a push to their phone, when a step waits on the grill gate. `gh pr create` is refused
   until `mcp__pipeline-gates__qc_verdict` recorded a pass, which it accepts only after a `review`
   agent and a green test run (more than 0 tests) since the last code change; a later code change
@@ -483,17 +483,15 @@ Before spawning any subagent:
    - **Send the Teams status — and treat it as a HARD GATE: do NOT start
      Phase 2 until the status is actually sent.** Run the `my-status` `send`
      flow (current ticket + ETA + next up, draft → explicit user go → IT team
-     chat). **If Teams is not reachable**
-     (`mcp__claude_ai_Microsoft_365__get_me` is not the identity-node account,
-     or the send errors on auth): **PAUSE the pipeline here.** The Microsoft
-     365 connector's auth is managed on the claude.ai side, so there is no
-     command you can run — show the ready-to-send draft and ask the user to
-     reconnect the connector in claude.ai under Customize → Connectors. Then
-     re-check
-     `get_me`, send the status, and
-     only **after the send succeeds** proceed to Phase 2. The stage move + the
-     *sent* status are a mandatory pair — an unsent status blocks the run.
-     The pipeline-gates mod opens its status gate on that successful send.
+     chat). **If Teams is not reachable** (`mcp__claude_ai_Microsoft_365__get_me`
+     is not the identity-node account, or the send errors on auth): **PAUSE the
+     pipeline here.** The Microsoft 365 connector's auth is managed on the
+     claude.ai side, so there is no command you can run — show the
+     ready-to-send draft and ask the user to reconnect the connector in their
+     claude.ai under Customize → Connectors. Then re-check `get_me`, send the
+     status, and only **after the send succeeds** proceed to Phase 2. The stage
+     move + the *sent* status are a mandatory pair — an unsent status blocks the
+     run. The pipeline-gates mod opens its status gate on that successful send.
 {% endif %}
 
 2. **Grill gate — align before building.** Classify the task:
@@ -636,12 +634,11 @@ Before spawning any subagent:
 {% endif %}
 
    **Aim for 8-15 test cases** depending on complexity — more for security/access-control features, fewer for simple UI tweaks.
-
 {% if task_software_fields %}
+
 5. **Initialize the checklist**:
    - If empty, populate with implementation steps derived from the (now-available) Technical Solution
    - If it has items, read them as part of the requirements
-
 {% endif %}
 {% else %}
 0. **Read the task** — gather requirements from the user's description (and any
@@ -672,7 +669,7 @@ Before spawning any subagent:
 
 6. **Identify scope**: which modules will be affected.{% if tickets_mcp == 'odoo' %} If the task looks too
    big to ship as one clean PR, propose a **sub-task** split now (see "Sub-tasks
-   & Blockers" above — user first, then link via `parent_id`).{% endif %}
+   & Blockers" above — user first, then link via `parent_id`).{% endif +%}
 
 7. **Summarize** the task scope for subagents (include Technical Solution highlights). In a
    split run this summary is the brief's Task section (see the hand-off below).
@@ -1133,7 +1130,7 @@ Spawn a **general-purpose** subagent:
 >
 > The addons live in a NESTED git repo and this run's code is in a WORKTREE of
 > it, already on the task branch. **Run everything from the worktree:** `cd <WT>`
-> — the `{{ custom_repo_name }}` repo (origin), base `{{ odoo_version }}`, current branch `<slug>`
+> — remote `{{ repo_org }}/{{ custom_repo_name }}`, base `{{ odoo_version }}`, current branch `<slug>`
 > (created off `origin/{{ odoo_version }}`). All git/gh/commit commands run here, never in the
 > parent repo or the user's main checkout `src/{{ custom_repo_name }}`.
 >
@@ -1152,6 +1149,18 @@ Spawn a **general-purpose** subagent:
 >    under 50 chars, task key in the BODY (never the header).
 > 4. Push: `git push -u origin <slug>`
 >
+{% if use_entire %}
+>    Then check the provenance trailer once:
+>    `git -C <WT> log -1 --format=%B | tail -5`
+>    **A trailer is what you should see.** The addons repo is nested inside the
+>    project and `entire` binds its session to the outer repo, so addons commits
+>    would come out bare; `.claude/hooks/entire-fanout.sh` replays each hook
+>    payload into both repos so they carry one too (GitHub merge commits carry
+>    none: no hook touches them). Report the outcome either way — a **missing**
+>    trailer means the fanout hook has stopped firing, which is worth saying
+>    loudly, because the hook is installed so that it swallows its own errors and
+>    nothing else will warn.
+{% else %}
 >    If this project layers a commit-provenance tool on top of git (a hook that
 >    stamps a trailer, a session recorder, an audit signer), verify it actually
 >    fired on this commit and report the outcome:
@@ -1162,10 +1171,11 @@ Spawn a **general-purpose** subagent:
 >    errors, so nothing warns. Whatever the outcome, say it in the phase report -
 >    a provenance gap found weeks later, on the one commit somebody needed to
 >    explain, is the expensive version of this.
+{% endif %}
 > 5. Create PR (title = the commit header; body = the documenter's
 >    PR_DESCRIPTION below, verify the {{ ticket_prefix }} key is in it):
 >    ```
->    gh pr create --base {{ odoo_version }} \
+>    gh pr create -R {{ repo_org }}/{{ custom_repo_name }} --base {{ odoo_version }} \
 >      --title "[TAG] module_name: short description" \
 >      --body "<PR_DESCRIPTION>"
 >    ```

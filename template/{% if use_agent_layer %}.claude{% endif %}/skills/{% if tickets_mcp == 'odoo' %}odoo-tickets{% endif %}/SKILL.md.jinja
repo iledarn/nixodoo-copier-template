@@ -80,7 +80,7 @@ take `id=<n>`.
 {% endif %}
 | `tag_ids` | **Always set.** `[[6, 0, [ids]]]` on create. ≥1 **area** tag + a **feature/topic** tag for any multi-ticket effort so siblings group. Reuse existing tags — never a near-duplicate. See [Tags](#tags-projecttags). |
 {% if task_software_fields %}
-| `tshirt_estimate` | `xs`=1h, `s`=4h, `m`=8h (1d), `l`=24h (3d), `xl`=40h (1w), `xxl`=80h. **Also set `{{ hours }}` to the same number** — RPC fires no onchange. |
+| `tshirt_estimate` | Estimate hours via the **`estimate` skill** first. `{{ hours }}` = those hours (RPC fires no onchange, set it explicitly — and NOT the bucket value). Bucket by hours: ≤2h `xs`, ≤6h `s`, ≤12h `m`, ≤32h `l`, ≤60h `xl`, else `xxl`. |
 | `priority_level` | `"4"` Highest … `"0"` Lowest; default `"1"`. |
 {% else %}
 | `{{ hours }}` | The estimate in hours (`estimate` skill). |

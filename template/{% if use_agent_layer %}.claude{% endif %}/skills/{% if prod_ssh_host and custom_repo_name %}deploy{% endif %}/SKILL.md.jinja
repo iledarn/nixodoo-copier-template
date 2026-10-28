@@ -40,6 +40,9 @@ chat was recreated.
   the box's `origin` is a git SSH remote and the pull runs on your forwarded
   key. A stale deploy key in the box's `~/.ssh` is not the account that owns
   the branch — do not use it.
+- **An SSH connection that fails**, at any step, follows the `prod-ops` rule: stop
+  and ask the user whether the work VPN is on, retry once after they confirm it,
+  and only then report a connectivity problem. Never report prod as down first.
 {% if test_ssh_hosts %}
 - If the 2nd argument names a test box ({{ test_ssh_hosts | join(', ') }}),
   target that alias instead of `prod`. The scripts pick that box's own database
@@ -299,8 +302,9 @@ bash "${{ project_dir_var }}/.claude/skills/deploy/scripts/prod-deploy-lock.sh" 
 - `LOCK_HELD … state=failed` → the previous deploy broke prod and its owner
   left the lock up on purpose (Step 7); the script does not wait on it. Stop,
   report; whoever repairs prod releases it.
-- `SSH_UNREACHABLE` → the box did not answer three times, nothing ran. Retry
-  once, then report.
+- `SSH_UNREACHABLE` → the box did not answer three times, nothing ran: ask the
+  user whether the work VPN is on (Fixed targets), retry once after they confirm,
+  then report.
 - A test box carries its own lock: the alias as host.
 
 **Merge** (skip for a PR Step 0 found already `MERGED`):
@@ -374,6 +378,9 @@ the same.
 `set -euo pipefail` stops at the first failing step, so a non-zero exit is a
 real failure.
 
+- **Exit 255 with no remote log** -> the SSH connection failed and nothing ran
+  on the box: not a failed deploy. Ask the user whether the work VPN is on (Fixed
+  targets) and rerun this step once after they confirm.
 - **Non-zero exit** -> go straight to Step 7 (failure), which keeps the lock
   raised.{% if use_queue_job %} Do **not** requeue.{% endif +%}
   Do **not** post success.
@@ -507,7 +514,7 @@ bash "${{ project_dir_var }}/.claude/skills/deploy/scripts/prod-deploy-lock.sh" 
   it; report.
 {% if tickets_mcp == 'odoo' %}
 
-## Step 8 — Record the exact commands on the task
+## Step 8 — Record the exact commands on the Odoo task
 
 {% if status_mcp == 'teams' %}The Teams post announces the deploy team-wide; the **task note** is the
 per-task record of *exactly what ran against prod*{% else %}The **task note** is the per-task record of *exactly what ran against prod*{% endif %}, so it is auditable
@@ -519,10 +526,20 @@ later. After Step 7, post an internal note to the task(s) the PR closes.
 - **Through** the Odoo connector (production, signed in as you; `odoo-tickets` →
   Connection & context flags).
 - **Post** per `odoo-tickets` (Internal notes — the connector's `message_post`,
-  signed by you). Body = host, modules, result (exit
+  signed by you), Category **`Deploy`**. Body = host, modules, result (exit
   code{% if use_queue_job %} + requeued count{% endif %}), PR link, and the **commands verbatim** in a
-  `<pre>`: the Step-2 deploy command{% if use_queue_job %} and the Step-6 requeue command{% endif %}.
-  HTML-escape them (`&` → `&amp;`, `<` → `&lt;`).
+  `<pre>`, in the order they ran: the Step-3.5 lock and merge commands, the Step-2
+  deploy command as Step 5 ran it (on a Step-2b deploy, the assembled Step-2b
+  sequence){% if use_queue_job %}, the Step-6 requeue command{% endif %} and the Step-7 lock release (or
+  mark-failed). HTML-escape them (`&` → `&amp;`, `<` → `&lt;`).
+
+```
+message_post(model="project.task", res_id=<task_id>,
+  body="<p><b>Deploy</b> — <modules> → <host> (PR #<n>, exit 0{% if use_queue_job %}, requeued <k>{% endif %}). <a href='<pr_url>'>PR</a></p>"
+       "<pre>&lt;Step-3.5 lock + merge&gt;\n\n&lt;Step-2 deploy command, verbatim&gt;\n\n{% if use_queue_job %}&lt;Step-6 requeue command&gt;\n\n{% endif %}&lt;Step-7 lock release&gt;</pre>",
+  context={"mail_create_nosubscribe": true})
+```
+
 - **Failed deploy** (non-zero exit) — the attempt still touched prod: post the
   same note with the result line naming the failing step, so the task records it
   too. This is the only task write on the failure path.

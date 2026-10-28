@@ -59,6 +59,14 @@ BUSY_PINNED = [f"- [{i}] feedback_busy_rule_{i:03} — " + "a rule the model mus
 BUSY_INDEX = "\n".join(
     [f"# kb index 2026-10-22 ({SCOPE}) — generated, do not edit", "", "## Pinned", *BUSY_PINNED, "", "## Recent", *RECENT]
 )
+# The same busy kb with CRITICAL rules among the last pinned ones, where the trim starts: kb
+# index lists critical pins first today, but the hook must not count on it.
+CRITICAL_AT = (3, 60, 87, 88, 89)
+CRITICAL_PINNED = [rule.replace("] feedback_", "] CRITICAL feedback_") if i in CRITICAL_AT else rule
+                   for i, rule in enumerate(BUSY_PINNED)]
+CRITICAL_INDEX = "\n".join(
+    [f"# kb index 2026-10-22 ({SCOPE}) — generated, do not edit", "", "## Pinned", *CRITICAL_PINNED, "", "## Recent", *RECENT]
+)
 BUSY_TASKS = [{"id": i, "level": 4 if i < 5 else 3, "title": f"busy task {i} " * 8} for i in range(60)]
 BUSY_SYNC = "\n".join(
     f"possible duplicate: [{i}] a new ticket title ~ [{i + 1}] an old thread title: kb promote {i + 1} KIO-{i}, then kb merge {i} {i + 1}"
@@ -148,6 +156,7 @@ class Rig:
         (self.dir / "index.txt").write_text(INDEX)
         (self.dir / "index-no-pins.txt").write_text(INDEX_NO_PINS)
         (self.dir / "index-busy.txt").write_text(BUSY_INDEX)
+        (self.dir / "index-critical.txt").write_text(CRITICAL_INDEX)
 
     def run(self, payload, *, with_kb=True, index="index.txt", status=STATUS_OK, **stub_env):
         log = self.dir / "calls.log"
@@ -280,6 +289,31 @@ def main():
     check("busy: the sessions line", "kb: 5 sessions without summary" in out, out[-600:])
     check("busy: the local extras", out.rstrip().endswith("local: compact sess-1"), out[-300:])
     check("busy: no cut", CUT_LINE not in out)
+
+    # CRITICAL rules late in the pinned list: every one kept, the others give way from the end
+    proc, calls = rig.run(payload(source="compact"), index="index-critical.txt",
+                          KB_STUB_TASKS=json.dumps(BUSY_TASKS), KB_STUB_SYNC=BUSY_SYNC)
+    out = proc.stdout
+    critical = [CRITICAL_PINNED[i] for i in CRITICAL_AT]
+    others = [rule for i, rule in enumerate(CRITICAL_PINNED) if i not in CRITICAL_AT]
+    kept = [rule for rule in others if rule in out]
+    check("critical: every CRITICAL rule kept", all(rule in out for rule in critical), out[-1500:])
+    check("critical: the other rules give way from the end", kept == others[:len(kept)] and len(kept) < len(others),
+          len(kept))
+    check("critical: the left-out line counts them", f"+{len(others) - len(kept)} {LEFT_OUT}" in out, out[-1500:])
+    check("critical: pinned order kept", [line for line in out.splitlines() if line.startswith("- [")]
+          == [rule for rule in CRITICAL_PINNED if rule in out])
+    check(f"critical: under {CONTEXT_CAP} characters", len(out) < CONTEXT_CAP, f"{len(out)} characters")
+
+    # a sync that fills the budget before the index: the cut keeps the CRITICAL rules all the same
+    flood = "\n".join(f"possible duplicate: [{i}] a long ticket title about a stock move ~ [{i + 1}] its older thread"
+                      for i in range(160))
+    proc, calls = rig.run(payload(), index="index-critical.txt", KB_STUB_SYNC=flood)
+    out = proc.stdout
+    check("critical cut: every CRITICAL rule kept", all(rule in out for rule in critical), out[-1500:])
+    check("critical cut: ends with the cut line", out.rstrip().endswith(CUT_LINE), out[-300:])
+    check(f"critical cut: under {CONTEXT_CAP} characters", len(out) < CONTEXT_CAP, f"{len(out)} characters")
+    check("rig: the sync alone passes the budget", len(flood) > 9_500, len(flood))
 
     # local extras that print more than the whole budget: cut at a line, said so, still under the cap
     local.write_text('#!/usr/bin/env bash\nfor i in $(seq 400); do echo "local: a chatty extra line number $i"; done\n')
