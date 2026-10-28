@@ -15,6 +15,14 @@ command and getting an explicit OK.
 - `ssh -F "${{ project_dir_var }}/.ssh/config" prod '<remote command>'` — the
   same connection the `prod-server` command uses interactively. Add `-A` only
   when the remote command needs git (pull on the forwarded key).
+- **The SSH connection fails** (a timeout, `No route to host`, `Connection refused`,
+  ssh exit 255 before anything ran on the box): stop and ask the user whether the
+  work VPN is on. A box on the office network is out of reach from anywhere else
+  without it, and that is the usual cause. Do not report the box as down, do not
+  retry in a loop, do not touch `.ssh/config`, and never switch the VPN on yourself
+  (it changes the machine's network). Once the user says it is on, retry once; a
+  failure then is a real connectivity problem to report. Exit 255 means nothing ran
+  on the box, so that retry is no partial write.
 {% if prod_local_ssh_host %}
 - `prod-local` is the same box over the office LAN ({{ prod_local_ssh_host }});
   `prod` ({{ prod_ssh_host }}) is the address that works from any network.
