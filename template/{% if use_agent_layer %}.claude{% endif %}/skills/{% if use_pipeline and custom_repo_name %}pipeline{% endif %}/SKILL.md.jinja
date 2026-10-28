@@ -155,8 +155,8 @@ The Checklist tab = `project.task.subtask` records (see `odoo-tickets`):
 
 Two task↔task link tabs the orchestrator maintains (fields + calls in
 `odoo-tickets` → "Sub-tasks & blockers"). Both stay attached to the current
-task — **distinct from OPEN_THREADS**, which are unrelated issues that become
-standalone Backlog tasks in Phase 7.
+task — **distinct from OPEN_THREADS**, which are unrelated issues {% if use_kb %}the user
+decides on, one by one, in Phase 7{% else %}that become standalone Backlog tasks in Phase 7{% endif %}.
 
 - **Too big → Sub-task.** If you judge the task too large to ship as one clean
   PR (several independent deliverables, spans unrelated concerns), surface the
@@ -340,7 +340,7 @@ At the end of your task, return a structured closing block:
 
 **OPEN_THREAD format:** `<short description> — <file:line if applicable>`,
 one per line. These are unrelated issues you spotted but did NOT fix per
-Rule 1; the orchestrator will file them in {% if use_kb %}kb{% else %}state.md{% endif %}.
+Rule 1; {% if use_kb %}the orchestrator asks the user about each one in Phase 7{% else %}the orchestrator will file them in state.md{% endif %}.
 
 **DECISION format:** `<what was decided and why>`, one per line. Use for
 scope expansions (Rule 1 exception), test-level choices (Rule 2), and
@@ -366,14 +366,16 @@ kb query 'MATCH (r:Record {external_id: $k}) RETURN r.id AS id, r.title AS title
 ```
 
 None yet (the ticket is not the user's yet, or the run starts from a description) →
-`kb add "<TASK-KEY or short title> — pipeline in progress" --scope {{ project_name }} --tag <area>`, and
+`kb add "<TASK-KEY or short title> — pipeline in progress" --scope {{ project_name }} --tag <area>  # user-picked-kb`, and
 `kb promote <id> <TASK-KEY>` as soon as the key is known, so the next sync updates that record
 instead of adding a second one.
 
 {% else %}
-`kb add "<short title> — pipeline in progress" --scope {{ project_name }} --tag <area>`.
+`kb add "<short title> — pipeline in progress" --scope {{ project_name }} --tag <area>  # user-picked-kb`.
 
 {% endif %}
+The user started the run, so its own task carries the marker `guard-kb-task.py` asks for.
+
 `<area>` is the module or subsystem the task is about, from the project's vocabulary
 (`kb tags`; the areas live in `.kb/tags.toml`). `kb add` refuses without one (exit 4). When it
 lists similar records instead (exit 5), the run's task is one of them if it names this work:
@@ -1003,8 +1005,8 @@ returns no closing block. The fix brief waits for every verdict.
   fourth `dev` round is refused until the user types
   `/pipeline-gate open rounds <reason>` (three more).
 - **NON-BLOCKING** — only PLAUSIBLE MAJOR / MINOR / low-confidence review findings: report
-  them, file MINOR or low-confidence items as OPEN_THREADS (post-MVP backlog)
-  instead of fixing them now. Proceed.
+  them, add MINOR or low-confidence items to OPEN_THREADS instead of fixing them now
+  ({% if use_kb %}the user decides on each in Phase 7{% else %}Phase 7 files them{% endif %}). Proceed.
 
 Report: "QC gate: review <summary> · verified <n> (<c> confirmed / <p> plausible / <r> refuted) · tests <N> · test cases <X/Y> — PASS (after <k> fix loops)."
 With the pipeline-gates mod, record the decision with `mcp__pipeline-gates__qc_verdict`: `pass`
@@ -1225,21 +1227,32 @@ from a green pipeline or a merged/awaiting-review PR.
   on the ticket's `depend_on_ids` (see "Sub-tasks & Blockers") and name it in the reason.{% endif %}
 
 
-#### Step 2: File OPEN_THREADs
+#### Step 2: Ask about OPEN_THREADs
 
-Each entry in `ALL_OPEN_THREADS` (accumulated across Phases 2–4) becomes a kb task, linked to
-the run:
+Nothing in `ALL_OPEN_THREADS` (accumulated across Phases 2–4) is filed unasked. Drop first what
+is not the user's to decide: master-data errors and wishes the user has not taken on are named
+once in the report; drift this run caused is fixed now. Show the rest as a numbered list, then
+ask with AskUserQuestion, one question per thread, up to four per call, each with these answers:
+
+- **Here**: do it in this session, after the final report. An unrelated fix gets its own
+  commit, and goes into the run's PR only on the user's word;
+- **kb**: a kb task, linked to the run;
+{% if tickets_mcp == 'odoo' %}
+- **Odoo**: a ticket, created per `odoo-tickets` (a ticket for someone else gets its handover
+  note). `kb sync odoo` brings the user's own tickets into kb; no `kb add` for it;
+{% endif %}
+- **Skip**: nothing is filed.
+
+A kb pick:
 
 ```bash
-kb add "<description — file:line>" --scope {{ project_name }} --tag <area> --link RELATED:<WIP_ID>
+kb add "<description — file:line>" --scope {{ project_name }} --tag <area> --link RELATED:<WIP_ID>  # user-picked-kb
 ```
 
 `<area>` is the area the thread is about (`kb tags`), often the run's own. Exit 5 lists similar
 records: a thread already on file gets `kb append <its id> "<what this run saw>"` instead;
-one that only looks alike goes in with `--distinct`.
-
-A thread becomes a ticket only when the user asks for one{% if tickets_mcp == 'odoo' %} (`odoo-tickets` creates it, then
-`kb promote <id> {% if task_keys %}<KEY>{% else %}<record id>{% endif %}`; a ticket for someone else gets the `odoo-tickets` handover note){% endif %}. Collect the new ids for the session record.
+one that only looks alike goes in with `--distinct`. Collect each thread's pick, and the new
+ids{% if tickets_mcp == 'odoo' %} and keys{% endif %}, for the session record.
 {% else %}
 #### Step 1: Close the WIP entry{% if tickets_mcp == 'odoo' %} (state + the mirrored ticket together){% endif %}
 
@@ -1333,7 +1346,7 @@ Done:
 Decisions:
 - <from ALL_DECISIONS, or "none">
 Open threads:
-- [<id>] <each task filed in Step 2, or "none">
+- <each thread with the user's Step-2 pick: [<id>] kb{% if tickets_mcp == 'odoo' %} / <KEY> ticket{% endif %} / here / skipped; or "none">
 ```
 
 `close` is idempotent and the body is written again by a later close: when the session goes on
@@ -1344,7 +1357,7 @@ past the run, carry this block into that close.
 > Phase 7: Memory closed
 > — session record written (`kb session current`)
 > — WIP [WIP_ID] → <done / awaiting review / BLOCKED>
-> — open threads filed: N (ids: <list>)
+> — open threads: N asked — kb <ids>{% if tickets_mcp == 'odoo' %}, tickets <keys>{% endif %}, here <n>, skipped <n>
 > — ADRs written: <list of docs/adr files, or "none">; CONTEXT.md: <terms added, or "unchanged">
 > — worktree: kept at <WT> (not dropped — ask the user before teardown)
 > — pipeline complete
