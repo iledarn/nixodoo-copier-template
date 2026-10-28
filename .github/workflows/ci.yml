@@ -30,6 +30,15 @@ jobs:
       - name: tests/test_kb_session_start.py (kb stubbed)
         run: uv run --no-project --with jinja2 python tests/test_kb_session_start.py
 
+  # Builds its own bare origin and clones (plain git, nothing rendered), so once per push.
+  adr-number:
+    name: ADR number guard corpus
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: tests/test_adr_number.py (a local bare origin, real git)
+        run: python3 tests/test_adr_number.py
+
   generate:
     runs-on: ubuntu-latest
     env:

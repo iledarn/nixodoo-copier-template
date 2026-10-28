@@ -26,7 +26,8 @@ The full inventory behind the summary in [the README](../README.md#what-it-gener
   against, an appetite agreed before options are drawn — and
   **domain-modeling**: a `CONTEXT.md` glossary of canonical terms mapped to Odoo
   models + `docs/adr/` decision records, both maintained as design conversations
-  resolve), `dev`/`review`/`verify`/`documenter` agents, a persistent
+  resolve; `adr-number.sh` numbers a record across every branch and worktree, so
+  two parallel branches cannot take one number), `dev`/`review`/`verify`/`documenter` agents, a persistent
   **memory template** (journal / state / standup), and optional workflow skills:
   the **pipeline** orchestrator (task → dev → QC gate → docs → demo GIF → PR, split into a
   mother session that grills and deploys and a child session that develops; see
