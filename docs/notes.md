@@ -52,6 +52,14 @@ Things that surprised somebody once, kept out of [the README](../README.md) so i
   the record whole or send it to a file; `kb log` and `kb service logs` are exempt as
   journals; `# truncation-ok` in the command is the deliberate escape. `KB_TRUNCATION_GUARD=0`
   disables it. Corpus: `python3 tests/test_kb_truncation_nudge.py`.
+- `guard-kb-task.py` (PreToolUse, rendered with `use_kb`) refuses `kb add` of a task (no
+  `--kind`, or `--kind task`) unless the command carries `# user-picked-kb`. Work outside the
+  task at hand is asked about first, per item: here, a kb task, a ticket, or skip. Filing
+  every finding unasked cost 65 archived tasks in one day (2026-10-28), 22 from a single
+  session's sweep of review findings. Memory records (`--kind note|howto|feedback|reference|decision`)
+  and `--once` notices pass; `$(…)`, backticks, chains and heredoc bodies are parsed, and
+  unbalanced quotes are judged on the raw text rather than let through. `KB_TASK_GUARD=0`
+  disables it. Corpus: `python3 tests/test_guard_kb_task.py`.
 - With `use_entire`, every session pushes a checkpoint, so `refs/entire/*` and the loose-object
   count climb until any git command trips `gc.auto` and an unbounded `git repack` runs inside
   whatever process made that call — measured at 1325 refs and 76,636 loose objects: 16 GB RSS,

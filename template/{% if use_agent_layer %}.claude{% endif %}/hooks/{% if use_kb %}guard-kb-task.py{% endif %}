@@ -1,0 +1,130 @@
+#!/usr/bin/env python3
+"""PreToolUse guard: a kb task is filed only after the user picked kb for it.
+
+Claude used to file every finding outside the task at hand as a kb task: an
+unrelated improvement, a check to run later, a leftover after a ticket, each
+non-blocking review finding of a pipeline run. Measured 2026-10-28: the user
+archived 65 such tasks in one day, 22 of them from a single session's sweep of
+review findings. A task nobody decided to do ages into noise in `kb today`.
+
+The rule (kb `feedback_scope_discipline`): ask first, one question per item,
+with four answers: do it here, a kb task, an Odoo ticket, or skip. This hook
+holds the kb side of it. `kb add` of a task is refused unless the command
+carries the marker `# user-picked-kb`, which Claude writes only when the user
+picked kb for that item or asked for the task in so many words (a pipeline
+run's own task included). The marker stays visible in the transcript.
+
+Not affected: records that are memory rather than work (`--kind note`,
+`howto`, `feedback`, `reference`, `decision`), and `--once` notices, which stay
+off the standup. KB_TASK_GUARD=0 disables the hook entirely.
+"""
+
+import json
+import os
+import re
+import shlex
+import sys
+
+MARKER = "# user-picked-kb"
+
+if os.environ.get("KB_TASK_GUARD") == "0":
+    sys.exit(0)
+
+payload = json.load(sys.stdin)
+if payload.get("tool_name") != "Bash":
+    sys.exit(0)
+
+command = (payload.get("tool_input") or {}).get("command") or ""
+if MARKER in command or not re.search(r"\bkb\b", command):
+    sys.exit(0)
+
+NOT_TASKS = {"note", "howto", "feedback", "reference", "decision"}
+OPERATORS = {";", "&&", "||", "|", "&", "|&", "(", ")", "`", "$(", "<", ">", "<<", ">>", "<<<"}
+PREFIXES = {"env", "command", "exec", "time", "nice", "nohup"}
+GLOBAL_FLAGS = {"--json"}
+ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+HEREDOC = re.compile(r"<<-?\s*(['\"]?)(\w+)\1[^\n]*\n.*?\n\s*\2\s*(?=\n|$)", re.S)
+
+
+def tokens(text):
+    """Shell words, with operators as tokens of their own even when glued to a word."""
+    text = HEREDOC.sub(" ", text).replace("\n", " ; ")
+    lexer = shlex.shlex(text, posix=True, punctuation_chars=";&|()<>")
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    out = []
+    for tok in lexer:
+        # `$(kb add …)` and `` `kb add …` `` open a command: split the opener off the word
+        while tok.startswith(("$(", "`")):
+            cut = 2 if tok.startswith("$(") else 1
+            out.append("(")
+            tok = tok[cut:]
+        while tok.endswith("`") and len(tok) > 1:
+            out.append(tok[:-1])
+            tok = "`"
+        if tok:
+            out.append("(" if tok == "$" else tok)
+    return out
+
+
+def segments(toks):
+    current = []
+    for tok in toks:
+        if tok in OPERATORS or tok == "$":
+            if current:
+                yield current
+            current = []
+        else:
+            current.append(tok)
+    if current:
+        yield current
+
+
+def files_task(segment):
+    """True when this segment is `kb add` of a task: no --kind, or --kind task, and no --once."""
+    words = list(segment)
+    while words and (ASSIGNMENT.match(words[0]) or words[0] in PREFIXES):
+        words.pop(0)
+    if not words or os.path.basename(words[0]) != "kb":
+        return False
+    rest = words[1:]
+    while rest and rest[0] in GLOBAL_FLAGS:
+        rest.pop(0)
+    if not rest or rest[0] != "add":
+        return False
+    args = rest[1:]
+    if "--help" in args or "--once" in args:
+        return False
+    kind = "task"
+    for i, arg in enumerate(args):
+        if arg in ("--kind", "-k") and i + 1 < len(args):
+            kind = args[i + 1]
+        elif arg.startswith("--kind="):
+            kind = arg.split("=", 1)[1]
+        elif arg.startswith("-k") and len(arg) > 2 and not arg.startswith("--"):
+            kind = arg[2:]
+    return kind not in NOT_TASKS
+
+
+try:
+    hit = any(files_task(seg) for seg in segments(tokens(command)))
+except ValueError:  # unbalanced quotes: judge the raw text instead of letting it through
+    hit = bool(
+        re.search(r"(^|[\s;&|(`])(\S*/)?kb(\s+--json)?\s+add(\s|$)", command)
+        and "--once" not in command
+        and not re.search(r"(--kind[=\s]+|-k\s*)(%s)\b" % "|".join(NOT_TASKS), command)
+    )
+
+if not hit:
+    sys.exit(0)
+
+sys.stderr.write(
+    "kb task guard: this files a kb task, and a task is filed only after the user picked kb for it.\n"
+    "Ask first, one AskUserQuestion question per item, with four answers: Here (do it in this "
+    "session), kb (a kb task), Odoo (a ticket), Skip (said once in the answer, nothing filed).\n"
+    "When the user picked kb, or asked for this task in so many words, re-run with "
+    "`%s` at the end of the command.\n"
+    "Memory records pass without it: --kind note|howto|feedback|reference|decision, and --once "
+    "notices.\n" % MARKER
+)
+sys.exit(2)

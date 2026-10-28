@@ -119,6 +119,8 @@ the newest. Put `antigravity` in the close's Tags.
 {% if use_kb %}
   the call when it does not apply, and the retry passes. `kb truncation guard` fires every time:
   read the record whole, or add `# truncation-ok` to the command when cutting is really right.
+  `kb task guard` fires every time too: a task is filed only after the user picked kb for it,
+  and then the command carries `# user-picked-kb`.
 {% else %}
   the call when it does not apply, and the retry passes.
 {% endif %}
