@@ -1,7 +1,8 @@
 # shellcheck shell=bash
-# SSH key + config for the remote servers. Each half is skipped when it already
-# exists: the key pair is never regenerated, and .ssh/config is written only
-# when missing — remove that one file and rerun to pick up new hosts.
+# SSH key + config for the remote servers. The key pair is made once and never
+# regenerated. .ssh/config is generated from the hosts in the copier answers, so
+# rerun this after a template update that changed them: a config that differs is
+# replaced, the old one kept as .ssh/config.bak and the difference shown.
 # The key has no passphrase: the deploy and prod-ops scripts use it
 # non-interactively.
 set -e
@@ -15,10 +16,9 @@ if [ ! -f "$KEY" ]; then
     cat "$KEY.pub"
     echo
 fi
-if [ -f "$CONFIG" ]; then
-    echo ".ssh/config exists — remove it and rerun to regenerate it from the current hosts."
-else
-    cat > "$CONFIG" << EOF
+NEW="$(mktemp "$CONFIG.XXXXXX")"
+trap 'rm -f "$NEW"' EXIT
+cat > "$NEW" << EOF
 Host prod
   HostName {{ prod_ssh_host }}
   User {{ prod_ssh_user }}
@@ -43,5 +43,15 @@ Host {{ alias }}
   ServerAliveCountMax 3
 {% endfor %}
 EOF
+chmod 644 "$NEW"
+if [ ! -f "$CONFIG" ]; then
+    mv "$NEW" "$CONFIG"
     echo "Wrote $CONFIG"
+elif cmp -s "$NEW" "$CONFIG"; then
+    echo "$CONFIG is up to date"
+else
+    cp -p "$CONFIG" "$CONFIG.bak"
+    echo "$CONFIG differs from the hosts in the copier answers; replacing it (the old one: $CONFIG.bak):"
+    diff -u --label "$CONFIG.bak" --label "$CONFIG" "$CONFIG.bak" "$NEW" || true
+    mv "$NEW" "$CONFIG"
 fi

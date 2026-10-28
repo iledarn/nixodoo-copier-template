@@ -39,6 +39,18 @@ jobs:
       - name: tests/test_adr_number.py (a local bare origin, real git)
         run: python3 tests/test_adr_number.py
 
+  # Renders setup-ssh-access itself and runs it in scratch projects, so once per push.
+  ssh-config:
+    name: setup-ssh-access corpus
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: false
+      - name: tests/test_setup_ssh_access.py (key pair pre-made, no ssh-keygen)
+        run: uv run --no-project --with jinja2 python tests/test_setup_ssh_access.py
+
   generate:
     runs-on: ubuntu-latest
     env:

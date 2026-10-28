@@ -262,7 +262,7 @@ backup_s3_bucket:
 
 prod_ssh_host:
   type: str
-  help: Production server SSH host/IP (empty = no SSH helper tooling)
+  help: "Production server SSH host/IP, the `prod` alias of .ssh/config (empty = no SSH helper tooling; after changing a host answer, rerun `nix run .#setup-ssh-access`)"
   default: ""
 
 prod_ssh_user:
