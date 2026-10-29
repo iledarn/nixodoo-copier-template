@@ -126,9 +126,10 @@ except (ValueError, KeyError, TypeError):
 if d.get("error"):
     sys.exit(0)
 loud = sum(1 for t in tasks if (t.get("level") or 0) >= 3)
-quiet = d.get("quiet") or 0
+# every open task below normal, silent ones too; a kb before `others` counted whisper alone
+others = d.get("others", d.get("quiet")) or 0
 print()
-print(f"kb today: {len(tasks)} open tasks, {loud} loud, {quiet} quiet; the list is left out here: kb today prints it.")
+print(f"kb today: {len(tasks)} on the standup, {loud} loud, {others} others; the list is left out here: kb today prints it, kb next --all every task.")
 pending = d.get("no_summary") or []
 if pending:
     noun = "session" if len(pending) == 1 else "sessions"

@@ -48,7 +48,7 @@ COMPACT_LINE = "kb: the context was just compacted"
 SCHEMA_LINE = "kb: schema stale or incomplete; run kb-setup"
 INSTALL_LINE = "kb: kb is not installed, so this session has no project memory. To set it up: nix run .#kb-setup"
 REGISTER_LINE = "kb: this checkout is not registered as the kb scope"
-STANDUP_LINE = "kb today: 9 open tasks, 4 loud, 2 quiet; the list is left out here: kb today prints it."
+STANDUP_LINE = "kb today: 9 on the standup, 4 loud, 5 others; the list is left out here: kb today prints it, kb next --all every task."
 RECENT_LINE = "120 recent records are left out here: kb index lists them, kb search finds any record."
 LEFT_OUT = "pinned rules left out to fit the context: kb index lists them"
 CUT_LINE = "kb: the session start was cut here to fit the context; kb index and kb today print the rest"
@@ -120,8 +120,11 @@ if args[:1] == ["today"] and "--json" in args:
     if env("KB_STUB_TODAY_ERROR"):
         print(json.dumps({"error": "neo4j went away", "tasks": []}))
     else:
-        print(json.dumps({"date": "2026-10-22", "scope": "x", "tasks": json.loads(env("KB_STUB_TASKS")),
-                          "quiet": 2, "no_summary": json.loads(env("KB_STUB_NO_SUMMARY", "[]"))}))
+        today = {"date": "2026-10-22", "scope": "x", "tasks": json.loads(env("KB_STUB_TASKS")),
+                 "quiet": 2, "others": 5, "no_summary": json.loads(env("KB_STUB_NO_SUMMARY", "[]"))}
+        if env("KB_STUB_NO_OTHERS"):
+            del today["others"]
+        print(json.dumps(today))
     sys.exit(0)
 print(f"kb: no such command {args!r}", file=sys.stderr)
 sys.exit(2)
@@ -253,6 +256,11 @@ def main():
     check("five sessions without summary: three named", "kb: 5 sessions without summary: 2026-10-20-1, 2026-10-21-1, "
           "2026-10-22-1 and 2 more; write them: kb session close --id <session_id>" in proc.stdout, proc.stdout[-400:])
 
+    # a kb from before `others`: its whisper-only `quiet` stands in
+    proc, _ = rig.run(payload(), KB_STUB_NO_OTHERS="1")
+    check("no others: quiet stands in", "kb today: 9 on the standup, 4 loud, 2 others;" in proc.stdout,
+          proc.stdout[-400:])
+
     # a kb that cannot answer the standup gives no count line, and no error
     proc, _ = rig.run(payload(), KB_STUB_TODAY_ERROR="1")
     check("today error: no count line", "kb today:" not in proc.stdout, proc.stdout[-300:])
@@ -285,7 +293,7 @@ def main():
     for name, needle in (("register line", REGISTER_LINE), ("schema line", SCHEMA_LINE)):
         check(f"busy: {name} inside the preview", 0 <= out.find(needle) < PREVIEW, out[:PREVIEW])
     check("busy: no notices line, kb notices never called", no_notices(out, calls), calls)
-    check("busy: the standup count", "kb today: 60 open tasks, 60 loud, 2 quiet" in out, out[-600:])
+    check("busy: the standup count", "kb today: 60 on the standup, 60 loud, 5 others" in out, out[-600:])
     check("busy: the sessions line", "kb: 5 sessions without summary" in out, out[-600:])
     check("busy: the local extras", out.rstrip().endswith("local: compact sess-1"), out[-300:])
     check("busy: no cut", CUT_LINE not in out)
