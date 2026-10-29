@@ -16,6 +16,9 @@ Mark chose what the start carries, the same for every session:
   characters). Their bodies (299 KB) cannot fit; `kb show` reads one.
 - **The standup as one count line**: open tasks, loud, quiet. `kb today` prints the list; the
   user sees it in the kb band. Nothing is recorded as shown.
+  **Amended by Mark, 2026-10-29**: the line counts the tasks on the standup, loud, and others
+  (`kb today --json` `others`: every open task below normal, silent ones included); `quiet`
+  counted whisper alone and hid 41 of 90 open tasks.
 - **The recent records as a count**: `kb index` lists them.
 - **Notices** (`kb add --once`) **as a count**: the model tells the user and hands them
   `kb notices show` to run in their own terminal. The notices close when it prints them, and
