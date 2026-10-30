@@ -136,15 +136,18 @@ test('an edit in a worktree and git in addons, earlier in the transcript, show b
   await $.session.start({ cwd: PROJECT, surface: 'desktop', isInteractive: true })
   await $.tool.call({ tool: 'Bash', command: 'true' })
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect(await ui.find({ text: '↓3 behind' })).toBeDefined()
   expect(await ui.find({ text: /^env$/ })).toBeDefined()
-  expect(await ui.find({ text: '↑1 ahead' })).toBeDefined()
+  // git state as symbols: addons clean and behind, env changed and ahead
+  expect(await ui.find({ text: '✓' })).toBeDefined()
+  expect(await ui.find({ text: '↓3' })).toBeDefined()
+  expect(await ui.find({ text: '↑1' })).toBeDefined()
+  expect(await ui.findAll({ type: 'Text', text: '±1' })).toHaveLength(2)
   // a worktree's port and state sit right after its label, before its branch
   const wt = (await ui.findAll({ type: 'Text' })).map(text => text.text)
   const label = wt.indexOf('wt')
-  expect(wt.slice(label, label + 3)).toEqual(['wt', ':2701 ● up', 'kio-1-feature'])
-  // the session's address, its database the subdomain: a button that opens the browser on a remote surface
-  expect((await ui.find({ key: 'wt-open-kio-1' }))?.props.label).toBe('wt_kio_1_102026.localhost:2701')
+  expect(wt.slice(label, label + 3)).toEqual(['wt', ':2701 ●', 'kio-1-feature'])
+  // the session's address, its database the subdomain, behind an open button on a remote surface
+  expect((await ui.find({ key: 'wt-open-kio-1' }))?.props.label).toBe('open')
   await ui.press({ key: 'wt-open-kio-1' })
   expect(opened).toEqual([['xdg-open', 'http://wt_kio_1_102026.localhost:2701/web']])
   // a bar between each two groups: pg, env, addons, the worktree, the other envs
@@ -156,7 +159,7 @@ test('an edit in a worktree and git in addons, earlier in the transcript, show b
   const term = await $.ui.mount({ ...BAND, surface: 'terminal' })
   expect((await term.find({ type: 'Link' }))?.props).toMatchObject({
     href: 'http://wt_kio_1_102026.localhost:2701/web',
-    label: 'wt_kio_1_102026.localhost:2701',
+    label: 'open',
   })
   await term.unmount()
 })

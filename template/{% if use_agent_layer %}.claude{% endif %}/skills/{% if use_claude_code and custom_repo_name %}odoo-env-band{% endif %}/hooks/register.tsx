@@ -92,8 +92,7 @@ async function collect($: EngineInterface): Promise<EnvSnapshot> {
 }
 
 // a worktree env's address: its database is the subdomain
-const address = (wt: WtEnv) => `${wt.db}.localhost:${wt.port}`
-const webUrl = (wt: WtEnv) => `http://${address(wt)}/web`
+const webUrl = (wt: WtEnv) => `http://${wt.db}.localhost:${wt.port}/web`
 
 async function openUrl($: EngineInterface, url: string): Promise<void> {
   const run = await $.process.run(['xdg-open', url], { timeoutMs: 10_000 })
@@ -186,18 +185,14 @@ export const register: Register = on => {
               ? git.branch
               : `${git.branch} (local)`}
           </Text>
-          {git.dirty > 0 ? (
-            <Text color="yellow">{`±${git.dirty} changed`}</Text>
-          ) : (
-            <Text color="green">✓ clean</Text>
-          )}
-          {git.ahead > 0 && <Text dimColor>{`↑${git.ahead} ahead`}</Text>}
-          {git.behind > 0 && <Text color="yellow">{`↓${git.behind} behind`}</Text>}
+          {git.dirty > 0 ? <Text color="yellow">{`±${git.dirty}`}</Text> : <Text color="green">✓</Text>}
+          {git.ahead > 0 && <Text dimColor>{`↑${git.ahead}`}</Text>}
+          {git.behind > 0 && <Text color="yellow">{`↓${git.behind}`}</Text>}
         </Box>
       )
 
     // the postgres cluster first, then one group per checkout (a worktree's port and state right after its
-    // label, its address last), then the other envs
+    // label, its open button last), then the other envs
     const groups: JSX.Element[] = [
       <Box flexDirection="row" columnGap={1}>
         {env.services.map(service => (
@@ -226,15 +221,15 @@ export const register: Register = on => {
         <Box flexDirection="row" columnGap={1}>
           <Text dimColor>wt</Text>
           <Text color={wt.isActive ? 'green' : undefined} dimColor={!wt.isActive}>
-            {`:${wt.port} ${wt.isActive ? '● up' : '○ down'}`}
+            {`:${wt.port} ${wt.isActive ? '●' : '○'}`}
           </Text>
           {gitState(wt.git, [ADDONS_BRANCH], true)}
           {/* the session is served by its database's subdomain (dbfilter ^%d$); a remote surface draws only an
-              https: Link as a link, so there the address is a button that opens the browser */}
+              https: Link as a link, so there `open` is a button that opens the browser */}
           {e.surface === 'terminal' ? (
-            <Link href={webUrl(wt)} label={address(wt)} />
+            <Link href={webUrl(wt)} label="open" />
           ) : (
-            <Button key={`wt-open-${wt.slug}`} label={address(wt)} plain dimColor onPress={() => openUrl($, webUrl(wt))} />
+            <Button key={`wt-open-${wt.slug}`} label="open" onPress={() => openUrl($, webUrl(wt))} />
           )}
         </Box>
       )),
