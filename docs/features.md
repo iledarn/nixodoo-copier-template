@@ -50,9 +50,9 @@ The full inventory behind the summary in [the README](../README.md#what-it-gener
   your own closed tickets, not from gut feel)
 - **Claude Code mods** (function-hook plugins under `.claude/skills/<name>/`, loaded in a
   trusted workspace): **odoo-env-band**, a row above the prompt with the checkouts this
-  session works in (env repo, addons, its worktree env: branch, changes, ahead/behind, port and
-  address) after the postgres cluster's state, a worktree's port and state beside its label and a
-  bar between each two groups;
+  session works in (env repo, addons, its worktree env: branch, changes, ahead/behind as `✓ ±N ↑N
+  ↓N`, port, and an `open` button for its address) after the postgres cluster's state, a
+  worktree's port and state beside its label and a bar between each two groups;
   **settings-sync**, `/settings-sync` then `/settings-sync apply`: the team's Claude settings
   (user and project-local) added to a machine's, never overwriting, from two layers, the template's
   (`.claude/skills/settings-sync/baseline/`) and the project's own (`.claude/settings-sync/`, written
