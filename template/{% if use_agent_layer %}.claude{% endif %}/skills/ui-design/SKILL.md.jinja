@@ -1,12 +1,13 @@
 ---
 name: ui-design
-description: "Load before ANY change to an Odoo {{ odoo_version }} view: form, list, kanban, search or wizard arch, an OWL template, a stylesheet. How a backend screen gets its look (built-in view elements, field widgets, the bundled Bootstrap utilities, never a per-form stylesheet) and the phone check every view change passes before it is done. Also for turning a mockup (Claude Design, Figma, an HTML prototype) into a view and for reviewing a diff that touches views or styles."
+description: "Load before ANY change to an Odoo {{ odoo_version }} view: form, list, kanban, search or wizard arch, an OWL template, a stylesheet. How a backend screen gets its look (built-in view elements, field widgets, the bundled Bootstrap utilities, never a per-form stylesheet) and the phone check a change with non-standard JS or CSS passes before it is done. Also for turning a mockup (Claude Design, Figma, an HTML prototype) into a view and for reviewing a diff that touches views or styles."
 ---
 
 # Odoo {{ odoo_version }} UI design: built-in first, usable on a phone
 
-A screen's look is assembled from what the web client already ships, and every
-view change is checked on a phone before it is called done.
+A screen's look is assembled from what the web client already ships, and a
+change that adds non-standard JS or CSS is checked on a phone before it is
+called done.
 
 Why:
 - A stylesheet added for one form is ad hoc: that form stops looking like the
@@ -154,7 +155,7 @@ Written like this:
   only inside that root, never scoped by a class put on `<form>`.
 - Colours come from variables (`$o-*`, Bootstrap theme variables,
   `var(--o-*)`), never hex literals; no `!important`.
-- It passes the phone check like any view.
+- It passes the phone check.
 
 ## Rejected in review
 
@@ -168,11 +169,16 @@ Written like this:
 
 ## Verify before calling it done
 
-- Phone: the browser pane's mobile preset (375x812, touch and a mobile user
-  agent), page reloaded after switching. Passes when the page has no sideways
-  scroll (`document.documentElement.scrollWidth <= innerWidth`), field values
-  read without truncation, every action the user needs is reachable without
-  hover, and each one2many is usable (cards or a narrow list).
+- Phone, only when the change adds non-standard JS or CSS: an OWL component,
+  template or patch, a JS asset, a `.scss`/`.css` file or `web.assets_*`
+  stylesheet entry, a `style=` attribute, or a class that neither Odoo nor the
+  bundled Bootstrap ships. A change built from view arch, stock widgets and
+  those classes alone skips it. It runs in the browser pane's mobile preset
+  (375x812, touch and a mobile user agent), page reloaded after switching.
+  Passes when the page has no sideways scroll
+  (`document.documentElement.scrollWidth <= innerWidth`), field values read
+  without truncation, every action the user needs is reachable without hover,
+  and each one2many is usable (cards or a narrow list).
 - Desktop at about 1280px and 1600px. Column counts and truncation are
   measured, not assumed; where a utility combination matters, read
   `getComputedStyle`, not the class list.

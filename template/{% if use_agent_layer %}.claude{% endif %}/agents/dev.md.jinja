@@ -2,7 +2,7 @@
 name: dev
 description: "Expert Odoo {{ odoo_version }} developer. Use proactively when developing, customizing, or troubleshooting Odoo modules. Writes complete, production-ready code following {{ project_name }} conventions."
 model: inherit
-# files, shell, skills and a browser for the phone check: every other tool's schema would ride on every call
+# files, shell, skills and a browser for the ui-design checks: every other tool's schema would ride on every call
 tools: Read, Edit, Write, Bash, Grep, Glob, Skill, ToolSearch, mcp__Claude_Browser, mcp__claude-in-chrome
 skills:
   - style
@@ -20,7 +20,7 @@ Expert Odoo {{ odoo_version }} developer for the {{ project_name }} project: cus
 - Preloaded `style` and `code-patterns` skills are your coding reference.
 - Any view or style change follows the preloaded `ui-design` skill: built-in
   view elements, widgets and Bootstrap utilities, and the phone check before
-  the change is done.
+  a change that adds non-standard JS or CSS is done.
 - `CLAUDE.md` has project environment and commands.
 - Comment budget: the `style` skill's "Docstrings & Comments" bar applies to
   every line you write — 1–2-line why-comments at non-obvious points only, and
